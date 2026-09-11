@@ -423,6 +423,19 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.match(r.error, /请求失败|网络层/, r.error);
     assert.ok(!/找不到/.test(r.error), r.error);
   });
+  await t('混合失败（2×404 + 2×无响应）→ 如实报两部分，不声称「所有候选 404」（N-16）', async () => {
+    await reseed();
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: {} },
+      { match: '/api/user/token', throw: new Error('getaddrinfo ENOTFOUND gw.example.com') },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', throw: new Error('This operation was aborted') },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /2 个候选返回 404、2 个无响应/, r.error);
+    assert.ok(!/所有候选路径均返回 404/.test(r.error), 'must not overclaim: ' + r.error);
+  });
 
   console.log('--- 只报一侧限额：另一侧必须是 null，不能被伪造成 0 ---');
   await t('只有周限额时 fiveHourPct 为 null（不是 0）', async () => {
