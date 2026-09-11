@@ -56,5 +56,41 @@ if (!args.some((a) => a.includes('electronDist'))) {
   }
 }
 
-const res = spawnSync(process.execPath, [cli, ...args], { stdio: 'inherit', env: process.env });
-process.exit(res.status === null ? 1 : res.status);
+// Retry the build. In this environment Windows Defender's real-time protection
+// intermittently corrupts or locks the freshly written 188MB unsigned binary,
+// and the three failures observed so far all landed at different stages:
+//   - extraction left everything except electron.exe;
+//   - the patched exe's version info could not be parsed;
+//   - 7za exited 1 because elevate.exe was momentarily unavailable.
+// All three succeeded on a plain retry, so retry rather than make the user
+// diagnose them. `dist/` is cleared between attempts (also with retries: the
+// leftover files can still be locked).
+const MAX_ATTEMPTS = 3;
+
+function clearDist() {
+  const dist = path.join(__dirname, '..', 'dist');
+  for (let i = 0; i < 12; i++) {
+    try {
+      fs.rmSync(dist, { recursive: true, force: true });
+    } catch {
+      // locked — wait and retry
+    }
+    if (!fs.existsSync(dist)) return;
+    const until = Date.now() + 1500;
+    while (Date.now() < until) { /* spin: no async here, this is a CLI */ }
+  }
+  console.log('[dist] warning: dist/ could not be fully cleared');
+}
+
+for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  if (attempt > 1) {
+    console.log('[dist] attempt ' + attempt + '/' + MAX_ATTEMPTS + ' after a failure (see above)');
+    clearDist();
+  }
+  const res = spawnSync(process.execPath, [cli, ...args], { stdio: 'inherit', env: process.env });
+  if (res.status === 0) process.exit(0);
+  if (attempt === MAX_ATTEMPTS) {
+    console.error('[dist] build failed after ' + MAX_ATTEMPTS + ' attempts');
+    process.exit(res.status === null ? 1 : res.status);
+  }
+}
