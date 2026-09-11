@@ -7,7 +7,6 @@ dist/
 .v2c/
 .workbuddy/
 
-# Review-agent forensics tooling (not project source; kept on disk)
-tools/*-forensics.ps1
-tools/inspect-env.ps1
-tools/cleanup-llmb.ps1
+# Review-agent forensics tooling (not project source; kept on disk).
+# Whole class: this project ships no PowerShell of its own.
+tools/*.ps1
