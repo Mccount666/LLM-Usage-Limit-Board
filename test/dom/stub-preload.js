@@ -44,6 +44,9 @@ contextBridge.exposeInMainWorld('api', {
   // Lets the DOM test assert call COUNTS (behaviour) instead of reading source.
   getFetchCount: async () => fetchCount,
   getSaveCount: async () => saveCount,
+  // Lets the DOM test flip a provider's canned answer mid-scenario (used to
+  // walk a row from the unknown state into the error state and back).
+  setUsage: async (id, value) => { usage[id] = value; },
   minimizeWindow: async () => {},
   hideWindow: async () => {},
 });

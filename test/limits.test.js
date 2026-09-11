@@ -94,6 +94,27 @@ t('{data:{balance:""}} -> null (空值不当 0)', () => assert.strictEqual(norma
 t('{data:{balance:null}} -> null', () => assert.strictEqual(normalizeBalance({ data: { balance: null } }), null));
 t('{data:{remain:0}} -> 0 (真的 0 要保留)', () => assert.strictEqual(normalizeBalance({ data: { remain: 0 } }).amount, 0));
 
+console.log('--- N-19: 空白串不得被 Number() 收编成 0（第九轮探针输出转正） ---');
+t('numOf(" ") -> null（曾收编为 0）', () => assert.strictEqual(numOf(' '), null));
+t('numOf("\\t\\n") -> null', () => assert.strictEqual(numOf('\t\n'), null));
+t('parseLimit(" ") -> null（曾得 {value:0}）', () => assert.strictEqual(parseLimit(' '), null));
+t('detectLimitPct({five_hour:{used:" ",total:100}}) -> null（曾渲染成 0%）', () => {
+  assert.strictEqual(detectLimitPct({ five_hour: { used: ' ', total: 100 } }, FIVE_HOUR_SPEC), null);
+});
+t('normalizeBalance({quota:"   "}) -> null（曾得 amount 0）', () => {
+  assert.strictEqual(normalizeBalance({ data: { quota: '   ' } }), null);
+});
+t('真 0 仍然保留：numOf(0) -> 0 / {remain:0} -> 0', () => {
+  assert.strictEqual(numOf(0), 0);
+  assert.strictEqual(normalizeBalance({ data: { remain: 0 } }).amount, 0);
+});
+t('吸收行为不因 trim 收紧：周边空白仍可解析', () => {
+  assert.strictEqual(numOf('  42  '), 42);
+  assert.deepStrictEqual(parseLimit('  42% '), { value: 42, explicit: true });
+  const r = normalizeBalance({ data: { balance: ' 7.5 ' } });
+  assert.strictEqual(r.amount, 7.5);
+});
+
 console.log('\nlimits.test: ' + pass + ' passed, ' + failures.length + ' failed');
 if (failures.length) {
   console.log('\nFailed:\n- ' + failures.join('\n- '));

@@ -89,7 +89,12 @@ global.fetch = async (url, opts = {}) => {
     if (url.includes(r.match)) {
       if (r.delay) await new Promise((res) => setTimeout(res, r.delay));
       if (r.throw) throw r.throw; // simulate timeout / DNS / refused
-      return { ok: r.status === 200, status: r.status, json: async () => r.body };
+      // jsonThrows: HTTP 200 with a body that is not JSON (SPA fallback page) —
+      // the N-20 "answered but unusable" class.
+      const json = r.jsonThrows
+        ? async () => { throw new SyntaxError('Unexpected token < in JSON at position 0'); }
+        : async () => r.body;
+      return { ok: r.status === 200, status: r.status, json };
     }
   }
   return { ok: false, status: 404, json: async () => ({}) };
@@ -253,7 +258,9 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     const r = await fetchUsage('p1');
     assert.strictEqual(r.ok, true);
     assert.ok(Math.abs(r.usage.fiveHourPct - 25) < 1e-9, 'got ' + r.usage.fiveHourPct);
-    assert.ok(calls.length >= 5, 'expected remembered-fail + 4 probes, made ' + calls.length);
+    // N-22: remembered-fail (1) + re-probe of the OTHER THREE (3) = 4. Five
+    // would mean the just-failed remembered path was probed twice.
+    assert.strictEqual(calls.length, 4, 'expected 1 remembered-fail + 3 re-probes, made ' + calls.length);
   });
 
   console.log('--- 窗口控制 + 托盘（N-7 / N-12）---');
@@ -393,13 +400,15 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
   });
 
   console.log('--- 网络层失败（七-P3：不能误报成「找不到字段」）---');
-  await t('200 但字段不可用 + 其余 404 → 报字段问题，不报 Base URL', async () => {
+  await t('200 但字段不可用 + 其余 404 → 报字段问题并如实计数，不引导去查 Base URL', async () => {
     await reseed();
     setRoutes([{ match: '/api/user/self', status: 200, body: { data: { maybe: 1 } } }]);
     const r = await fetchUsage('p1');
     assert.strictEqual(r.ok, false);
     assert.match(r.error, /找不到/, r.error);
-    assert.ok(!/404|Base URL/.test(r.error), 'must not blame the URL: ' + r.error);
+    // N-20: the tally must state the 404s factually (3 candidates answered 404).
+    assert.match(r.error, /3 个候选返回 404/, r.error);
+    assert.ok(!/Base URL/.test(r.error), 'must not blame the URL: ' + r.error);
   });
   await t('全部候选网络失败 → 归类为请求失败/网络层', async () => {
     await reseed();
@@ -435,6 +444,72 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.strictEqual(r.ok, false);
     assert.match(r.error, /2 个候选返回 404、2 个无响应/, r.error);
     assert.ok(!/所有候选路径均返回 404/.test(r.error), 'must not overclaim: ' + r.error);
+  });
+
+  // N-20：失败分类的验收按「响应形态 × 组合」矩阵来，不只测被点名的那一格。
+  console.log('--- N-20 混合失败矩阵：200-无字段 / 200+非JSON × 404 / 网络失败 ---');
+  await t('① 200-有响应但无字段 + 其余网络失败 → 报字段问题并列出无响应数，不整体报「网络层」', async () => {
+    await reseed();
+    setRoutes([
+      { match: '/api/user/self', status: 200, body: { data: { username: 'u' } } },
+      { match: '/api/user/token', throw: new Error('connect ECONNREFUSED 127.0.0.1:443') },
+      { match: '/api/user/status', throw: new Error('connect ECONNREFUSED 127.0.0.1:443') },
+      { match: '/api/status', throw: new Error('connect ECONNREFUSED 127.0.0.1:443') },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /找不到 5h\/周 限额字段/, r.error);
+    assert.match(r.error, /3 个无响应/, r.error);
+    assert.ok(!/请求失败（网络层）/.test(r.error), 'must not blame the network alone: ' + r.error);
+  });
+  await t('② 200+非JSON + 其余 404 → 该候选计为「有响应但内容不可用」，不再混入「无响应」（N-20）', async () => {
+    await reseed();
+    setRoutes([
+      { match: '/api/user/self', status: 200, jsonThrows: true },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /3 个候选返回 404/, r.error);
+    assert.match(r.error, /1 个有响应但内容不可用/, r.error);
+    assert.ok(!/无响应/.test(r.error), 'a 200 candidate must not be called 无响应: ' + r.error);
+  });
+  await t('③ 200+非JSON + 其余网络失败 → 两类都如实列出（N-20）', async () => {
+    await reseed();
+    setRoutes([
+      { match: '/api/user/self', status: 200, jsonThrows: true },
+      { match: '/api/user/token', throw: new Error('connect ECONNREFUSED 127.0.0.1:443') },
+      { match: '/api/user/status', throw: new Error('connect ECONNREFUSED 127.0.0.1:443') },
+      { match: '/api/status', throw: new Error('connect ECONNREFUSED 127.0.0.1:443') },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /找不到 5h\/周 限额字段/, r.error);
+    assert.match(r.error, /3 个无响应/, r.error);
+    assert.match(r.error, /1 个有响应但内容不可用/, r.error);
+  });
+
+  console.log('--- N-22：记忆路径失败后的重探不得把同一路径计两次 ---');
+  await t('重探去重：3×404 + 1×无响应 报成「3 个 404、1 个无响应」，不是「4 个 404」（N-22）', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/', status: 200, body: { data: { five_hour: { used: 1, total: 4 } } } }]);
+    const ok1 = await fetchUsage('p1');
+    assert.strictEqual(ok1.ok, true, 'first round must succeed and remember a path');
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: {} },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', throw: new Error('This operation was aborted') },
+    ]);
+    const callsBefore = calls.length;
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /3 个候选返回 404、1 个无响应/, r.error);
+    assert.ok(!/4 个候选返回 404/.test(r.error), 'double count: ' + r.error);
+    // 1（记忆路径）+ 3（其余候选）= 4 次请求，而不是 5 次
+    assert.strictEqual(calls.length - callsBefore, 4, 'requests: ' + (calls.length - callsBefore));
   });
 
   console.log('--- 只报一侧限额：另一侧必须是 null，不能被伪造成 0 ---');

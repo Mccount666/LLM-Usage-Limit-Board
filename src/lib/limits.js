@@ -71,13 +71,19 @@ function clampPct(n) {
 
 /** Coerce a field to a number. Accepts numeric strings and "42%" (→ 42). */
 function numOf(v) {
-  if (v == null || v === '') return null;
+  if (v == null) return null;
   if (typeof v === 'string') {
     const s = v.trim();
+    // N-19: `Number(' ') === 0`, so a whitespace-only field would be absorbed
+    // into a confident 0 — a forged reading on the "0% = quota fine" axis.
+    // Whitespace-only is MISSING data, same as null/''.
+    if (s === '') return null;
     if (s.endsWith('%')) {
       const p = parseFloat(s);
       return Number.isFinite(p) ? p : null;
     }
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
   }
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -88,13 +94,16 @@ function numOf(v) {
  * percentage — by a "%" suffix — which is a stronger signal than magnitude.
  */
 function parseLimit(v) {
-  if (v == null || v === '') return null;
+  if (v == null) return null;
   if (typeof v === 'string') {
     const s = v.trim();
+    if (s === '') return null; // N-19: same absorption trap as numOf
     if (s.endsWith('%')) {
       const p = parseFloat(s);
       return Number.isFinite(p) ? { value: p, explicit: true } : null;
     }
+    const n = Number(s);
+    return Number.isFinite(n) ? { value: n, explicit: false } : null;
   }
   const n = Number(v);
   return Number.isFinite(n) ? { value: n, explicit: false } : null;
@@ -166,7 +175,9 @@ function normalizeBalance(root) {
   const FIELDS = ['balance', 'remain', 'remaining', 'quota', 'credit'];
   for (const key of FIELDS) {
     const v = r?.[key];
-    if (v == null || v === '') continue;
+    // N-19: `v === ''` missed whitespace-only strings, and Number(' ') === 0
+    // turned "no balance data" into a confident 0. Trim, then judge.
+    if (v == null || (typeof v === 'string' && v.trim() === '')) continue;
     const n = Number(v);
     if (Number.isFinite(n)) return { amount: n, currency: '', field: key };
   }

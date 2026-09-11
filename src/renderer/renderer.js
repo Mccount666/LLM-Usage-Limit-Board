@@ -32,7 +32,14 @@ function loadThresholds() {
 }
 
 function saveThresholds(t) {
-  localStorage.setItem(THRESHOLDS_LS_KEY, JSON.stringify(t));
+  // Same discipline as dismissPrivacyNotice: a throwing setItem must not abort
+  // the caller's redraw loop. Thresholds are already in `state`, so the worst
+  // case is "not remembered after a restart" — the safe direction.
+  try {
+    localStorage.setItem(THRESHOLDS_LS_KEY, JSON.stringify(t));
+  } catch {
+    /* storage unavailable — session-only thresholds */
+  }
 }
 
 const els = {
@@ -307,6 +314,11 @@ function startEdit(id) {
 async function deleteProvider(id) {
   const idx = state.providers.findIndex((p) => p.id === id);
   const removed = idx >= 0 ? state.providers[idx] : null;
+  // N-23: the rollback anchors on the FOLLOWING provider's id, not on the
+  // captured index — with two deletes in flight the array can shrink before
+  // the failed one rolls back, and a stale `idx` would insert at the wrong
+  // place. Falls back to push() if the neighbour is gone too.
+  const nextId = idx >= 0 ? (state.providers[idx + 1]?.id ?? null) : null;
   const cached = state.lastUsage.get(id); // kept so a failed delete can restore it (N-14)
   state.providers = state.providers.filter((p) => p.id !== id);
   state.lastUsage.delete(id); // drop the cache entry with the provider
@@ -319,7 +331,11 @@ async function deleteProvider(id) {
     // did not reach disk, and say why (第五轮复核 P1-C). The usage cache is
     // restored with it: without this the row's readings fall back to "--"
     // until the next poll (N-14).
-    if (removed) state.providers.splice(idx, 0, removed);
+    if (removed) {
+      const at = nextId ? state.providers.findIndex((p) => p.id === nextId) : -1;
+      if (at >= 0) state.providers.splice(at, 0, removed);
+      else state.providers.push(removed);
+    }
     if (cached) state.lastUsage.set(id, cached);
     renderAll();
     showSaveError(`删除失败：${err?.message || String(err)}`);

@@ -150,6 +150,26 @@ app.whenReady().then(async () => {
     ck('缺的那侧 bar 是 unknown（不是绿色 ok）', /unknown/.test(res.p5FillClasses[0]) && !/ok|warn|danger/.test(res.p5FillClasses[0]), JSON.stringify(res.p5FillClasses[0]));
     ck('缺的那侧有解释性 tooltip', /未返回/.test(res.p5PctTitles[0] || ''), JSON.stringify(res.p5PctTitles[0]));
     ck('有数据的那侧照常显示', res.p5Pcts[1] === '80.0%' && /warn/.test(res.p5FillClasses[1]), JSON.stringify(res.p5Pcts));
+    // 第八轮 杂项：unknown 行翻转到错误态时，斜纹类与 tooltip 必须一并清掉，
+    // 否则"缺数据"的观感会残留进错误态（applyUsageRow error 分支的行为断言）
+    const misc = await win.webContents.executeJavaScript(`(async () => {
+      try {
+        await window.api.setUsage('p5', { ok: false, error: 'probe failed' });
+        await pollOne('p5');
+        const row = [...document.querySelectorAll('.usage-item')].find((r) => r.dataset.id === 'p5');
+        const fill = row.querySelector('.bar-fill');
+        const pct = row.querySelector('.bar-pct');
+        const err = row.querySelector('.usage-error');
+        return JSON.stringify({ pageError: '', fillClasses: fill.className, pctTitle: pct.title, pctText: pct.textContent, errText: err ? err.textContent : '' });
+      } catch (e) {
+        return JSON.stringify({ pageError: String((e && e.stack) || e) });
+      }
+    })()`).then((s) => JSON.parse(s));
+    ck('杂项探针自身无页面异常', misc.pageError === '', misc.pageError || 'clean');
+    ck('杂项：unknown 行转错误态后不残留 unknown 类', misc.fillClasses.trim() === 'bar-fill ok', JSON.stringify(misc.fillClasses));
+    ck('杂项：unknown 的 tooltip 一并清空', misc.pctTitle === '', JSON.stringify(misc.pctTitle));
+    ck('杂项：错误态读数仍是 --（不是上一轮的 80.0%）', misc.pctText === '--', JSON.stringify(misc.pctText));
+    ck('杂项：错误信息写入行内', /probe failed/.test(misc.errText), JSON.stringify(misc.errText));
     ck('渲染进程无 console 错误', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
   } else if (testCase === 'behavior') {
     // Behavioural (not source-text) assertions for two items the reviewer asked

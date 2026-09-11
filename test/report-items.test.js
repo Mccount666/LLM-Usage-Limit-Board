@@ -72,7 +72,10 @@ t('P1-1 persistAll 只传显式载荷', () => {
   matches(REND, /apiKey: p\.id === changed\.id \? changed\.apiKey : undefined/);
 });
 t('第六轮 P1-B 保存失败不得留下幽灵条目', () => {
-  assert.ok(!/state\.providers\.push\(/.test(REND), 'must not mutate state before the write succeeds');
+  // N-23 added one legitimate push: deleteProvider's rollback fallback
+  // (`push(removed)` restores a failed delete). Any OTHER push would be the
+  // save-before-write mutation this assertion exists to catch.
+  assert.ok(!/state\.providers\.push\((?!removed\))/.test(REND), 'must not mutate state before the write succeeds');
   matches(REND, /const nextProviders = isNew/);
   matches(REND, /state\.providers = nextProviders/); // commit only after success
   assert.ok(REND.indexOf('state.providers = nextProviders') > REND.indexOf('const ok = await persistAll'), 'commit must come after the write');
@@ -135,7 +138,8 @@ t('P2-3c http 明文告警存在', () => {
 });
 t('P2-4 normalizeBalance 按键名遍历并跳空值', () => {
   matches(LIMITS, /const FIELDS = \['balance', 'remain', 'remaining', 'quota', 'credit'\]/);
-  matches(LIMITS, /if \(v == null \|\| v === ''\) continue/);
+  // N-19: whitespace-only strings must be skipped too — Number(' ') === 0.
+  matches(LIMITS, /if \(v == null \|\| \(typeof v === 'string' && v\.trim\(\) === ''\)\) continue/);
   assert.ok(!/amount \/ 100/.test(LIMITS), 'must not convert units by guessing');
   matches(LIMITS, /return \{ amount: n, currency: '', field: key \}/);
 });
@@ -307,7 +311,7 @@ t('第六轮 P3-2/P3-1/P3-6：资产与死代码', () => {
 });
 t('P3-C 候选先到先用 + 记住可用路径', () => {
   matches(MAIN, /function probeCandidates\(/);
-  matches(MAIN, /function probeAll\(\)/);
+  matches(MAIN, /function probeAll\(list\)/); // N-22: takes the to-probe list
   matches(MAIN, /candidatePathCache\.set\(/);
   matches(MAIN, /candidatePathCache\.delete\(/);
   matches(MAIN, /candidatePathCache\.clear\(\)/);
@@ -329,11 +333,12 @@ t('第五轮 P1-B accept 严格且按调用方区分', () => {
   );
 });
 t('第七轮 P3：诊断覆盖网络层（超时/断网不误报为字段问题）', () => {
-  matches(MAIN, /return \{ statuses: \[\], messages: \[\], errors: \[\], responded: 0 \}/);
+  matches(MAIN, /return \{ statuses: \[\], messages: \[\], errors: \[\], responded: 0, unusable: 0 \}/);
   matches(MAIN, /if \(res\.ok\) diag\.responded\+\+/);
   matches(MAIN, /diag\.responded === 0 && diag\.statuses\.length > 0/);
   matches(MAIN, /else if \(res\.error\) diag\.errors\.push\(res\.error\)/);
-  matches(MAIN, /if \(diag\.statuses\.length === 0 && diag\.errors\.length > 0\)/);
+  // N-20: the all-silent branch must not fire when a candidate DID answer.
+  matches(MAIN, /diag\.statuses\.length === 0 && diag\.errors\.length > 0 &&\s*\n\s*diag\.unusable === 0 && diag\.responded === 0/);
   matches(MAIN, /请求超时（10 秒）/);
   matches(MAIN, /请求失败（网络层）/);
 });
@@ -379,6 +384,30 @@ t('全项目真实 fetch( 调用仅 1 处', () => {
   assert.strictEqual(n, 1, 'found ' + n + ' fetch calls');
 });
 t('README 不再写死 HTTPS-only 描述', () => notMatches(README, /发起一次 HTTPS 请求/));
+
+console.log('--- 第九轮（N-19..N-23 + 杂项）---');
+t('N-21 main.js 不得再出现「green dot」图标描述（实际是三柱图形）', () => {
+  notMatches(MAIN, /green dot/i);
+});
+t('N-20 解析失败必须携带 status 与 parseError（不得并入网络失败）', () => {
+  matches(MAIN, /parseError: err\?\.message \|\| String\(err\)/);
+  matches(MAIN, /else if \(res\.parseError\) diag\.unusable\+\+/);
+});
+t('N-22 重探必须排除刚失败过的记忆路径', () => {
+  matches(MAIN, /probeAll\(paths\.filter\(\(p\) => p !== remembered\)\)/);
+});
+t('N-23 删除回滚按 nextId 重算插入位（不得复用 await 前的 idx）', () => {
+  notMatches(strip(REND), /splice\(idx, 0, removed\)/);
+  matches(REND, /p\.id === nextId/);
+});
+t('杂项 saveThresholds 的 setItem 有 try 守卫（对齐 dismissPrivacyNotice）', () => {
+  matches(strip(REND), /function saveThresholds\(t\) \{\s*try \{/);
+});
+t('杂项 dist.js 成功路径必须校验 Setup.exe 落地且非零字节', () => {
+  const DIST = read('tools/dist.js');
+  matches(DIST, /findSetupArtifact/);
+  notMatches(DIST, /if \(res\.status === 0\) process\.exit\(0\)/);
+});
 
 console.log('\nreport-items.test: ' + pass + ' passed, ' + failures.length + ' failed');
 if (failures.length) {

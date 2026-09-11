@@ -82,13 +82,40 @@ function clearDist() {
   console.log('[dist] warning: dist/ could not be fully cleared');
 }
 
+// Review round 9 (misc ②): "exit 0" has previously coexisted with an empty
+// dist/ (the win-unpacked incident the report caught mid-build). Success is
+// only success when a non-empty Setup.exe actually landed.
+function findSetupArtifact() {
+  const dist = path.join(__dirname, '..', 'dist');
+  try {
+    const hit = fs.readdirSync(dist).find((f) => /setup.*\.exe$/i.test(f));
+    if (!hit) return null;
+    const full = path.join(dist, hit);
+    return fs.statSync(full).size > 0 ? full : null;
+  } catch {
+    return null;
+  }
+}
+
 for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
   if (attempt > 1) {
-    console.log('[dist] attempt ' + attempt + '/' + MAX_ATTEMPTS + ' after a failure (see above)');
-    clearDist();
+    if (attempt === MAX_ATTEMPTS) {
+      // Review round 9 (misc ②): keep the previous failure scene on the final
+      // attempt — the half-written dist/ is exactly what diagnosis needs.
+      console.log('[dist] final attempt — keeping the previous dist/ for diagnosis');
+    } else {
+      clearDist();
+    }
   }
   const res = spawnSync(process.execPath, [cli, ...args], { stdio: 'inherit', env: process.env });
-  if (res.status === 0) process.exit(0);
+  if (res.status === 0) {
+    const artefact = findSetupArtifact();
+    if (artefact) {
+      console.log('[dist] artefact: ' + artefact + ' (' + fs.statSync(artefact).size + ' bytes)');
+      process.exit(0);
+    }
+    console.error('[dist] electron-builder exited 0 but no Setup.exe landed in dist/ — treating as a failure');
+  }
   if (attempt === MAX_ATTEMPTS) {
     console.error('[dist] build failed after ' + MAX_ATTEMPTS + ' attempts');
     process.exit(res.status === null ? 1 : res.status);
