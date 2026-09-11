@@ -39,6 +39,8 @@ npm run dist:win
 产物在 `dist/`：`LLM Usage Limit Board-<version>-Setup.exe`，双击安装（NSIS，可选安装目录、建桌面/开始菜单快捷方式）。
 
 > **国内网络注意**：electron-builder 默认从 GitHub releases 取 NSIS / winCodeSign / Electron 包，`github.com` 不通时**不会报错，而是卡住不动**（表现为 `dist/win-unpacked` 建了个空目录后长时间无输出）。`npm run dist:win` 已经默认把镜像指到 npmmirror，想覆盖就自己设 `ELECTRON_MIRROR` / `ELECTRON_BUILDER_BINARIES_MIRROR`。
+>
+> **另一类打包失败**：如果报 `ENOENT: rename ...\win-unpacked\electron.exe`，说明解压 Electron 压缩包时那个 188MB 的主程序没落地（本机实测过：zip 里确实有 `electron.exe`，解压后其它文件都在、就它没有；杀软实时保护是最可能的原因）。`tools/dist.js` 会自动改为从已解包的 `node_modules/electron/dist` 复制，绕开解压——前提是 `build.electronVersion` 没有被显式指定（指定了就以你的为准，不覆盖）。
 
 图标是代码生成的，不是二进制素材：
 
@@ -67,6 +69,6 @@ npm run test:all  # 上面三个依次跑
 不同服务商返回字段不一致。`src/lib/limits.js` 里的解析逻辑是启发式的：
 
 - **Coding Plan 模式**：从 `/api/user/self` 等接口探测 5h / 周限额字段，关键词匹配（`five_hour` / `5h` / `quota_5h` / `weekly` / `week` / `seven_day` 等变体，支持 `used/total`、`used_percentage`、`"42%"` 三种形态），实现见 `detectLimitPct`
-- **余额模式**：尝试 `/api/user/balance`、`/api/user/wallet`，再 fallback 到 `balance/remain/remaining/quota/credit` 字段；对 OneAPI/NewAPI 的 `quota`（单位：分）做了自动转换
+- **余额模式**：尝试 `/api/user/balance`、`/api/user/wallet`，再 fallback 到 `balance/remain/remaining/quota/credit` 字段。**数值原样显示，不做单位换算、不贴币种**——不同网关的 `quota` 有的是分、有的是元，猜错比不换算更糟（显示的是"多少钱"，不是百分比）
 
 如果你用的服务商字段名不一样，把那个接口的真实返回 JSON 贴给我（涂掉 key），我帮你改 `detectLimitPct / normalizeBalance`。

@@ -144,35 +144,33 @@ function detectLimitPct(root, spec) {
   return null;
 }
 
-/** Extract a remaining-balance amount from a gateway response. */
+/**
+ * Extract a remaining-balance amount from a gateway response.
+ *
+ * The value is returned EXACTLY as the gateway sent it: no unit conversion and
+ * no currency label. An earlier version divided `quota` by 100 and labelled it
+ * `CNY` above a hard threshold of 1000. That was an unverifiable guess with two
+ * bad consequences (第六轮复核 P2-B):
+ *   - the comment claimed "$5.00" (dollars), the code labelled CNY, and the
+ *     README claimed 分 — three claims, at most one of which could be right;
+ *   - `{quota: 1000}` rendered "1000" while `{quota: 1001}` rendered "CNY 10.01",
+ *     a 100x discontinuity between two adjacent balances.
+ * Guessing wrong about money is worse than showing a raw number, so we show the
+ * raw number and say so. Same principle as `detectLimitPct` abstaining on a bare
+ * absolute amount.
+ */
 function normalizeBalance(root) {
   const r = root?.data ?? root;
-  // Iterate by KEY (not value) so we can record which field we matched,
-  // and skip null/empty values that `Number()` would coerce to 0.
+  // Iterate by KEY (not value) so a matched field is unambiguous, and skip
+  // null/empty values that `Number()` would coerce to 0.
   const FIELDS = ['balance', 'remain', 'remaining', 'quota', 'credit'];
-  let amount = null;
-  let field = null;
   for (const key of FIELDS) {
     const v = r?.[key];
     if (v == null || v === '') continue;
     const n = Number(v);
-    if (Number.isFinite(n)) {
-      amount = n;
-      field = key;
-      break;
-    }
+    if (Number.isFinite(n)) return { amount: n, currency: '', field: key };
   }
-  if (amount == null) return null;
-
-  // Some gateways store quota in cents (e.g. NewAPI uses 500000 = $5.00).
-  // Only apply the cents heuristic when the value came from the `quota`
-  // field AND looks like an integer > 1000.
-  let currency = '';
-  if (field === 'quota' && Number.isInteger(amount) && amount > 1000) {
-    currency = 'CNY';
-    amount = amount / 100;
-  }
-  return { amount, currency };
+  return null;
 }
 
 module.exports = {

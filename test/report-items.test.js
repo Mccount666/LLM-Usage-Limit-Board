@@ -67,8 +67,15 @@ t('P0-3b preload 每个通道都有 main handler', () => {
 
 console.log('--- 首轮 P1 ---');
 t('P1-1 persistAll 只传显式载荷', () => {
-  matches(REND, /persistAll\(\{ id, apiKey: apiKey \|\| undefined \}\)/);
-  matches(REND, /p\.id === changed\.id \? changed\.apiKey : undefined/);
+  matches(REND, /async function persistAll\(providers, changed\)/);
+  matches(REND, /persistAll\(nextProviders, \{ id, apiKey: apiKey \|\| undefined \}\)/);
+  matches(REND, /apiKey: p\.id === changed\.id \? changed\.apiKey : undefined/);
+});
+t('第六轮 P1-B 保存失败不得留下幽灵条目', () => {
+  assert.ok(!/state\.providers\.push\(/.test(REND), 'must not mutate state before the write succeeds');
+  matches(REND, /const nextProviders = isNew/);
+  matches(REND, /state\.providers = nextProviders/); // commit only after success
+  assert.ok(REND.indexOf('state.providers = nextProviders') > REND.indexOf('const ok = await persistAll'), 'commit must come after the write');
 });
 t('P1-2 无 clamp( 死代码，clampPct 仍在用', () => {
   notMatches(strip(REND), /clamp\(/);
@@ -129,7 +136,8 @@ t('P2-3c http 明文告警存在', () => {
 t('P2-4 normalizeBalance 按键名遍历并跳空值', () => {
   matches(LIMITS, /const FIELDS = \['balance', 'remain', 'remaining', 'quota', 'credit'\]/);
   matches(LIMITS, /if \(v == null \|\| v === ''\) continue/);
-  matches(LIMITS, /field === 'quota' && Number\.isInteger/);
+  assert.ok(!/amount \/ 100/.test(LIMITS), 'must not convert units by guessing');
+  matches(LIMITS, /return \{ amount: n, currency: '', field: key \}/);
 });
 t('P2-5 safeStorage 降级告警全链路', () => {
   matches(MAIN, /safeStorage unavailable/);
@@ -165,10 +173,20 @@ t('P3-6 无生效的 backdrop-filter', () => {
   notMatches(CSS, /^\s*-?backdrop-filter\s*:/m);
   matches(CSS, /P3-6/);
 });
-t('P3-7 setBar 兜底 + 两分支归一化', () => {
+t('P3-7 setBar 兜底 + 未知态不落成 0%', () => {
   matches(REND, /if \(!fillEl \|\| !pctEl\) return/);
-  matches(REND, /Number\.isFinite\(usage\.fiveHourPct\)/);
+  matches(REND, /function setPctBar\(/);
+  matches(REND, /const known = Number\.isFinite\(pct\)/);
+  matches(REND, /'unknown'/);
   matches(REND, /Number\.isFinite\(usage\.amount\)/);
+});
+t('第六轮 P1-A 单侧限额不得被伪造成 0', () => {
+  assert.ok(!/clampPct\(fiveHourPct \?\? 0\)/.test(MAIN), 'five-hour side must not be coerced to 0');
+  assert.ok(!/clampPct\(weeklyPct\s*\?\? 0\)/.test(MAIN), 'weekly side must not be coerced to 0');
+  matches(MAIN, /fiveHourPct: fiveHourPct == null \? null : clampPct\(fiveHourPct\)/);
+  matches(MAIN, /weeklyPct: weeklyPct == null \? null : clampPct\(weeklyPct\)/);
+  matches(CSS, /\.bar-fill\.unknown/);
+  matches(CSS, /\.bar-pct\.unknown/);
 });
 
 console.log('--- 复审 N-1..N-4 ---');
@@ -260,9 +278,32 @@ t('P3-A 行形状由 usage.mode 决定', () => {
   matches(REND, /row\.innerHTML = buildRowHtml\(p, mode\)/);
 });
 t('P3-B providers:save 校验 id 字符串且唯一', () => {
-  matches(MAIN, /typeof id !== 'string' \|\| id\.length === 0/);
+  matches(MAIN, /typeof rawId !== 'string' \|\| rawId\.length === 0/);
   matches(MAIN, /seenIds\.has\(id\)/);
   matches(MAIN, /seenIds\.add\(id\)/);
+});
+t('第六轮 P3 批次：截断/锁顺序/版本告警/主机名匹配', () => {
+  // P3-3: dedupe and storage must use the SAME (truncated) id
+  matches(MAIN, /const id = rawId\.slice\(0, 100\)/);
+  assert.ok(!/id: id\.slice\(0, 100\)/.test(MAIN), 'storage must reuse the already-truncated id');
+  // P3-4: single-instance lock is acquired before anything async
+  assert.ok(MAIN.indexOf('requestSingleInstanceLock') < MAIN.indexOf('app.whenReady()'), 'lock must be acquired before whenReady');
+  // P3-7: a version we do not understand must not look like "no data"
+  matches(MAIN, /version \$\{raw\.version\} is not supported/);
+  // P3-8: match the hostname, not a substring of the URL
+  matches(MAIN, /function hostOf\(url\)/);
+  matches(MAIN, /host\.endsWith\('\.openai\.com'\)/);
+  assert.ok(!/includes\('api\.openai\.com'\)/.test(strip(MAIN)), 'substring match would reject api.openai.com.example.com');
+});
+t('第六轮 P3-2/P3-1/P3-6：资产与死代码', () => {
+  // P3-2: the generated tray PNG must not sit inside the packaged tree
+  assert.ok(!fs.existsSync(path.join(ROOT, 'src', 'assets', 'tray.png')), 'unused asset would ship in the asar');
+  matches(read('tools/make-icon.js'), /path\.join\(root, 'build', 'tray\.png'\)/);
+  // P3-1: no dead branch left in the icon generator
+  assert.ok(!/&& false/.test(read('tools/make-icon.js')), 'dead branch');
+  // P3-6: pollAll reports whether a round actually started
+  matches(REND, /if \(state\.polling\) return false/);
+  matches(REND, /正在刷新，请稍候/);
 });
 t('P3-C 候选先到先用 + 记住可用路径', () => {
   matches(MAIN, /function probeCandidates\(/);

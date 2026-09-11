@@ -162,7 +162,11 @@ function bindUi() {
     window.api.hideWindow().catch(() => {});
   });
 
-  els.refreshBtn.addEventListener('click', () => pollAll());
+  els.refreshBtn.addEventListener('click', async () => {
+    const started = await pollAll();
+    // A poll round can take up to ~10s; without this the button just did nothing.
+    if (!started) els.lastUpdated.textContent = '正在刷新，请稍候…';
+  });
 
   els.providerForm.addEventListener('submit', onSaveProvider);
   els.cancelEdit.addEventListener('click', resetForm);
@@ -212,21 +216,32 @@ async function onSaveProvider(evt) {
   // New providers require a key; editing without typing a key keeps the old one.
   if (isNew && !apiKey) return;
 
-  if (isNew) {
-    state.providers.push({ id, name, baseUrl, mode, hasKey: true });
-  } else {
-    Object.assign(existing, { name, baseUrl, mode, hasKey: apiKey ? true : existing.hasKey });
-  }
+  // Build the PROSPECTIVE list without touching `state.providers`. The previous
+  // version mutated state first and only returned on failure, which left a ghost
+  // entry behind: the next renderAll() (e.g. after deleting some other provider)
+  // would display a subscription that was never written to disk, and it would be
+  // polled every 60s until restart. Commit only after disk accepted it.
+  const nextProvider = {
+    id,
+    name,
+    baseUrl,
+    mode,
+    hasKey: isNew ? true : apiKey ? true : existing.hasKey,
+  };
+  const nextProviders = isNew
+    ? [...state.providers, nextProvider]
+    : state.providers.map((p) => (p.id === id ? nextProvider : p));
+
   // `changed` carries ONLY the (id, apiKey) pair that needs to hit disk.
   // `undefined` means "keep existing"; empty string would mean "delete".
-  const ok = await persistAll({ id, apiKey: apiKey || undefined });
+  const ok = await persistAll(nextProviders, { id, apiKey: apiKey || undefined });
   if (!ok.ok) {
-    // P2-3 UI feedback: show error and STOP. Do not reset form / re-render —
-    // `state.providers` was already mutated, so a re-render would show an
-    // unsaved row as if it had been persisted.
+    // Nothing was mutated, so the UI is already consistent with disk — just
+    // report why and keep the form filled in (P2-3 + 第六轮复核 P1-B).
     showSaveError(ok.error || '保存失败，请检查 Base URL 格式');
     return;
   }
+  state.providers = nextProviders; // committed to memory only now
   clearSaveError();
   resetForm();
   renderAll();
@@ -243,8 +258,15 @@ function clearSaveError() {
   els.saveError.classList.add('hidden');
 }
 
-async function persistAll(changed) {
-  const payload = state.providers.map((p) => ({
+/**
+ * Persist an explicitly supplied provider list.
+ * @param providers the FULL list to write — not read from `state`, so the caller
+ *   can persist a prospective list and only commit it to state on success.
+ * @param changed `{ id, apiKey }`: which provider's key is being set. `undefined`
+ *   apiKey means "keep the stored one", '' means "delete it".
+ */
+async function persistAll(providers, changed) {
+  const payload = providers.map((p) => ({
     id: p.id,
     name: p.name,
     baseUrl: p.baseUrl,
@@ -442,25 +464,41 @@ function applyUsageRow(id, usage, error) {
     const level = balanceLevel(amount, warn, danger);
     const visualPct = balanceVisualPct(amount, warn, danger);
     setBar(fills[0], pcts[0], visualPct, formatBalance(amount, usage.currency), level);
+    pcts[0].title = '数值与单位由服务商决定，本工具原样显示、不做换算';
     return;
   }
 
-  // N-3: normalize before toFixed so a malformed backend response
-  // (undefined / null / string) cannot throw TypeError here.
-  const fiveHourPct = Number.isFinite(usage.fiveHourPct) ? usage.fiveHourPct : 0;
-  const weeklyPct    = Number.isFinite(usage.weeklyPct)    ? usage.weeklyPct    : 0;
-  setBar(fills[0], pcts[0], fiveHourPct, `${fiveHourPct.toFixed(1)}%`);
-  setBar(fills[1], pcts[1], weeklyPct,    `${weeklyPct.toFixed(1)}%`);
+  // 第六轮复核 P1-A: a side the provider did not report must never become 0%.
+  // "0%" on this board reads as "plenty of quota left", so fabricating it is the
+  // most dangerous possible error. null/undefined -> explicit unknown state.
+  setPctBar(fills[0], pcts[0], usage.fiveHourPct);
+  setPctBar(fills[1], pcts[1], usage.weeklyPct);
+}
+
+/** Render one plan-side percentage, or the unknown state when it is absent. */
+function setPctBar(fillEl, pctEl, pct) {
+  if (!fillEl || !pctEl) return;
+  if (!Number.isFinite(pct)) {
+    setBar(fillEl, pctEl, null, '--');
+    pctEl.title = '服务商未返回这一项的限额数据';
+    return;
+  }
+  // Normalize before toFixed so a malformed value cannot throw (P3-7).
+  setBar(fillEl, pctEl, pct, `${pct.toFixed(1)}%`);
+  pctEl.title = '';
 }
 
 function setBar(fillEl, pctEl, pct, label, levelOverride) {
   if (!fillEl || !pctEl) return; // P3-7: tolerate unexpected DOM shape
-  const safePct = Number.isFinite(pct) ? pct : 0;
+  const known = Number.isFinite(pct);
+  const safePct = known ? pct : 0;
   fillEl.style.width = `${safePct.toFixed(1)}%`;
-  fillEl.classList.remove('ok', 'warn', 'danger');
-  const level =
-    levelOverride ||
-    (safePct >= 85 ? 'danger' : safePct >= 60 ? 'warn' : 'ok');
+  fillEl.classList.remove('ok', 'warn', 'danger', 'unknown');
+  pctEl.classList.toggle('unknown', !known);
+  // An unknown value gets its own level so it can never be styled as "ok".
+  const level = !known
+    ? 'unknown'
+    : levelOverride || (safePct >= 85 ? 'danger' : safePct >= 60 ? 'warn' : 'ok');
   fillEl.classList.add(level);
   pctEl.textContent = label;
 }
@@ -498,8 +536,9 @@ function formatBalance(amount, currency) {
 }
 
 // --- Polling ---------------------------------------------------------------
+/** @returns true if a round was started, false if one is already in flight. */
 async function pollAll() {
-  if (state.polling) return;
+  if (state.polling) return false;
   state.polling = true;
   try {
     await Promise.all(state.providers.map((p) => pollOne(p.id)));
@@ -508,9 +547,11 @@ async function pollAll() {
     // pollOne() is written not to reject; if that ever breaks, keep the
     // already-armed interval alive instead of surfacing an unhandled rejection.
     console.error('pollAll failed', err);
+    return true;
   } finally {
     state.polling = false;
   }
+  return true;
 }
 
 async function pollOne(id) {
@@ -555,7 +596,8 @@ function escapeHtml(s) {
   });
 }
 
-// Self-test (P0-2). Runs once at module load; no-op in prod.
+// Self-test (P0-2). Runs once at module load in EVERY build, deliberately:
+// it costs microseconds and a silently broken escaper is worse than a log line.
 // Assertions use concatenation so the expected strings cannot be
 // accidentally decoded by any transport layer.
 ;(function () {

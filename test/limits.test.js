@@ -78,12 +78,18 @@ t('getPath 穿透嵌套', () => assert.strictEqual(getPath({ a: { b: { c: 7 } } 
 
 console.log('--- normalizeBalance ---');
 t('{data:{balance:12.5}} -> 12.5', () => assert.strictEqual(normalizeBalance({ data: { balance: 12.5 } }).amount, 12.5));
-t('{data:{quota:500000}} -> 5000 + CNY', () => {
+t('{data:{quota:500000}} -> 原样 500000（不猜单位、不贴币种）', () => {
   const r = normalizeBalance({ data: { quota: 500000 } });
-  assert.strictEqual(r.amount, 5000);
-  assert.strictEqual(r.currency, 'CNY');
+  assert.strictEqual(r.amount, 500000);
+  assert.strictEqual(r.currency, '');
+  assert.strictEqual(r.field, 'quota');
 });
-t('{data:{quota:500}} -> 500 (不触发送分转换)', () => assert.strictEqual(normalizeBalance({ data: { quota: 500 } }).amount, 500));
+t('相邻余额不出现 100 倍跳变（1000 vs 1001）', () => {
+  const a = normalizeBalance({ data: { quota: 1000 } });
+  const b = normalizeBalance({ data: { quota: 1001 } });
+  assert.deepStrictEqual([a.amount, b.amount], [1000, 1001]);
+  assert.strictEqual(a.currency, b.currency);
+});
 t('{data:{balance:""}} -> null (空值不当 0)', () => assert.strictEqual(normalizeBalance({ data: { balance: '' } }), null));
 t('{data:{balance:null}} -> null', () => assert.strictEqual(normalizeBalance({ data: { balance: null } }), null));
 t('{data:{remain:0}} -> 0 (真的 0 要保留)', () => assert.strictEqual(normalizeBalance({ data: { remain: 0 } }).amount, 0));

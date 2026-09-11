@@ -334,7 +334,10 @@ button.primary {
 
 .bar-row {
   display: grid;
-  grid-template-columns: 36px 1fr 36px;
+  /* Third column is `auto`, not a fixed 36px: balance readings are raw numbers
+     from the gateway and can be long ("12345678.00"), which the fixed column
+     clipped (第六轮复核 P2-C). */
+  grid-template-columns: 36px 1fr auto;
   align-items: center;
   gap: 6px;
   font-size: 10px;
@@ -368,10 +371,34 @@ button.primary {
   background: linear-gradient(90deg, #f87171, #ef4444);
 }
 
+/* Unknown: the provider returned no value for this window (第六轮复核 P1-A).
+   Deliberately NOT green — an unlit green bar reads as "plenty of quota left". */
+.bar-fill.unknown {
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.14) 0 3px,
+    rgba(255, 255, 255, 0.04) 3px 6px
+  );
+}
+
+.bar-pct.unknown {
+  color: #6b7280;
+}
+
 .bar-pct {
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: #d6d9de;
+  white-space: nowrap; /* never clip a reading */
+}
+
+/* Balance reading: the amount is shown exactly as the gateway reports it, with
+   no unit conversion (see normalizeBalance), so it can be arbitrarily long. */
+.balance-row .balance-amount {
+  color: #d6d9de;
+}
+.balance-row .balance-amount.unknown {
+  color: #6b7280;
 }
 
 .usage-error {

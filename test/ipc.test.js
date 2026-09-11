@@ -391,6 +391,24 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.match(r.error, /\*\*\*/);
   });
 
+  console.log('--- 只报一侧限额：另一侧必须是 null，不能被伪造成 0 ---');
+  await t('只有周限额时 fiveHourPct 为 null（不是 0）', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/user/self', status: 200, body: { data: { seven_day: { used_percentage: 80 } } } }]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.usage.weeklyPct, 80);
+    assert.strictEqual(r.usage.fiveHourPct, null, 'missing side must stay null, got ' + JSON.stringify(r.usage.fiveHourPct));
+  });
+  await t('只有 5h 限额时 weeklyPct 为 null', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/user/self', status: 200, body: { data: { five_hour: { used: 1, total: 4 } } } }]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.usage.fiveHourPct, 25);
+    assert.strictEqual(r.usage.weeklyPct, null);
+  });
+
   console.log('--- 行为验证（取代只匹配源码的文本断言）---');
   await t('P2-3 读取侧：磁盘上被改成 file:// 也要拦住', async () => {
     // Simulates a hand-edited / migrated providers.json — the write-side check

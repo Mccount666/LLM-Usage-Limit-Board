@@ -48,6 +48,18 @@ function invalidateProviderCache() {
 // is ready. We never want anything leaving this machine.
 app.commandLine.appendSwitch('disable-crash-reporter');
 
+// Hard block any attempt to open a second instance with a different path.
+// Acquired BEFORE anything async so a second launch cannot race the first one
+// into creating a window (P3-4).
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  // Launching the app again while it is minimized/hidden should reveal the
+  // existing widget instead of silently doing nothing.
+  app.on('second-instance', () => showWidget());
+}
+
 let widgetWindow = null;
 
 // --- Window ----------------------------------------------------------------
@@ -110,15 +122,7 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Hard block any attempt to open a second instance with a different path.
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-} else {
-  // Launching the app again while it is minimized/hidden should reveal the
-  // existing widget instead of silently doing nothing.
-  app.on('second-instance', () => showWidget());
-}
+
 
 // --- Window controls + tray --------------------------------------------------
 //
@@ -193,7 +197,13 @@ function readAll() {
   try {
     if (!fs.existsSync(file)) return { version: 1, providers: [] };
     const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    if (!raw || raw.version !== 1) return { version: 1, providers: [] };
+    if (!raw || raw.version !== 1) {
+      // Never silently discard data: a future v2 file must not look like "no
+      // subscriptions". We keep the file untouched and say so (P3-7).
+      if (raw) console.warn(`[data] providers.json version ${raw.version} is not supported (expected 1); ignoring its contents`);
+      else console.warn('[data] providers.json is not a JSON object; ignoring its contents');
+      return { version: 1, providers: [] };
+    }
     return raw;
   } catch (err) {
     console.error('readAll failed; starting empty', err);
@@ -266,10 +276,14 @@ ipcMain.handle('providers:save', (_evt, providers) => {
     // P3-B: an `undefined`/non-string id is silently dropped by
     // JSON.stringify, which would leave an unaddressable record on disk
     // (every lookup by data-id then misses). Reject it and duplicates up front.
-    const id = incoming?.id;
-    if (typeof id !== 'string' || id.length === 0) {
+    const rawId = incoming?.id;
+    if (typeof rawId !== 'string' || rawId.length === 0) {
       return { ok: false, error: '订阅 id 不合法（必须是非空字符串）' };
     }
+    // Truncate ONCE and use the truncated value everywhere: dedupe and the
+    // stored record must agree, otherwise two ids differing only past char 100
+    // pass the uniqueness check and then land on disk as the same entry (P3-3).
+    const id = rawId.slice(0, 100);
     if (seenIds.has(id)) {
       return { ok: false, error: `订阅 id 重复: ${id}` };
     }
@@ -296,7 +310,7 @@ ipcMain.handle('providers:save', (_evt, providers) => {
       apiKeyEnc = encryptKey(incoming.apiKey);
     }
     next.push({
-      id: id.slice(0, 100),
+      id,
       name: String(incoming.name || '').slice(0, 100),
       baseUrl: rawBaseUrl.slice(0, 500),
       mode: VALID_MODES.has(incoming.mode) ? incoming.mode : 'plan',
@@ -364,18 +378,29 @@ async function fetchUsage(provider) {
   }
 }
 
+/** Hostname of a URL, or '' when it does not parse. */
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
 // --- Plan mode (Coding Plan / subscription) --------------------------------
 // 5h + weekly limits. OpenAI and Anthropic don't expose these for API keys,
 // so we surface that honestly. Generic OpenAI-compatible gateways (OneAPI /
 // NewAPI / packycode) often do — we try their user-info endpoints.
 async function fetchPlanUsage(provider) {
   const base = provider.baseUrl.replace(/\/+$/, '');
-  const lower = base.toLowerCase();
 
-  if (lower.includes('api.openai.com')) {
+  // Match the HOSTNAME, not a substring: `includes('api.openai.com')` also
+  // matched "api.openai.com.example.com" and wrongly refused to poll it (P3-8).
+  const host = hostOf(base);
+  if (host === 'openai.com' || host.endsWith('.openai.com')) {
     return { ok: false, error: 'OpenAI 未提供 5h/周限额接口（订阅与 API 配额分开）' };
   }
-  if (lower.includes('anthropic')) {
+  if (host === 'anthropic.com' || host.endsWith('.anthropic.com')) {
     return { ok: false, error: 'Anthropic 未提供 5h/周限额接口' };
   }
 
@@ -387,15 +412,18 @@ async function fetchPlanUsage(provider) {
   if (!data) return { ok: false, error: explainProbeFailure(diag, provider, 'plan') };
 
   // Accepted means hasPlanLimits() was true for this exact root, so at least one
-  // of the two is non-null — no further emptiness check needed.
+  // of the two is non-null. The other side is left as null ON PURPOSE: coercing
+  // it to 0 renders a green 0% bar, and "0%" on this board reads as "plenty of
+  // quota left" — the most dangerous direction to be wrong in. The renderer
+  // shows an unknown state (grey "--") instead. See 第六轮复核 P1-A.
   const fiveHourPct = detectLimitPct(data, FIVE_HOUR_SPEC);
   const weeklyPct = detectLimitPct(data, WEEKLY_SPEC);
   return {
     ok: true,
     usage: {
       mode: 'plan',
-      fiveHourPct: clampPct(fiveHourPct ?? 0),
-      weeklyPct: clampPct(weeklyPct ?? 0),
+      fiveHourPct: fiveHourPct == null ? null : clampPct(fiveHourPct),
+      weeklyPct: weeklyPct == null ? null : clampPct(weeklyPct),
     },
   };
 }

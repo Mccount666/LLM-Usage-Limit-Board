@@ -54,8 +54,6 @@ function drawRGBA(size) {
       const i = (y * S + x) * 4;
       if (!insideRounded(x + 0.5, y + 0.5)) continue; // transparent outside
       let px = PANEL;
-      // 1.5px (in target space) inner border
-      if (!insideRounded(x + 0.5, y + 0.5 + 0) && false) px = BORDER;
       const edge = Math.min(x, y, S - 1 - x, S - 1 - y);
       if (edge < 1.5 * SS) px = BORDER;
       for (let b = 0; b < bars.length; b++) {
@@ -165,9 +163,11 @@ for (const dir of [path.join(root, 'build'), path.join(root, 'src', 'assets')]) 
   fs.writeFileSync(path.join(dir, 'icon.ico'), ico);
 }
 
-// Tray icon (16x16 PNG, inlined into main.js so packaging needs no asset path)
+// Tray icon (16x16 PNG). Written next to the installer assets, NOT into src/:
+// main.js inlines the base64 so nothing needs to load it at runtime, and
+// `files: ["src/**/*"]` would otherwise ship an unused file in the asar (P3-2).
 const tray = frames.find((f) => f.size === 16).png;
-fs.writeFileSync(path.join(root, 'src', 'assets', 'tray.png'), tray);
+fs.writeFileSync(path.join(root, 'build', 'tray.png'), tray);
 
 console.log('build/icon.ico + src/assets/icon.ico  ' + ico.length + ' bytes, frames: ' + SIZES.join('/'));
 console.log('tray.png base64 (for the inline constant):');

@@ -18,9 +18,19 @@ const root = path.join(__dirname, '..', '..');
 // cases assert against the mutated values.
 const dataDir = path.join(os.tmpdir(), 'llmb-dom-' + process.pid);
 app.setPath('userData', dataDir);
-app.on('quit', () => {
+
+// NOTE: cleanup must run BEFORE app.exit(). Electron's app.exit() terminates
+// immediately and does NOT emit 'quit'/'before-quit'/'will-quit', so an
+// `app.on('quit', cleanup)` handler never fires — that mistake leaked one
+// ~7.6MB Chromium profile per case (58 dirs / 403MB observed). process.on('exit')
+// is a belt-and-braces catch for any path that skips cleanup().
+let cleaned = false;
+function cleanup() {
+  if (cleaned) return;
+  cleaned = true;
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* best effort */ }
-});
+}
+process.on('exit', cleanup);
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -75,6 +85,16 @@ app.whenReady().then(async () => {
           modeTags: document.querySelectorAll('#providerList .mode-tag').length,
           buttons: document.querySelectorAll('#providerList button').length,
           httpWarningHidden: document.getElementById('httpWarning').classList.contains('hidden'),
+          // P1-A: provider that reports only the weekly window
+          p5Pcts: pcts(rowOf('p5')),
+          p5FillClasses: [...rowOf('p5').querySelectorAll('.bar-fill')].map((e) => e.className),
+          p5PctTitles: [...rowOf('p5').querySelectorAll('.bar-pct')].map((e) => e.title),
+          // P2-C: a long balance reading must not be clipped by its column
+          p6Text: rowOf('p6').querySelector('.bar-pct').textContent,
+          // A fixed-width column makes an unbreakable reading OVERFLOW rather
+          // than wrap, so scrollWidth vs clientWidth is the metric that reacts.
+          p6Overflow: (() => { const el = rowOf('p6').querySelector('.bar-pct'); return el.scrollWidth - el.clientWidth; })(),
+          p6Title: rowOf('p6').querySelector('.bar-pct').title,
           // Bar fill must be proportional to the percentage (measured, not eyeballed)
           barsByRow: rows.map((r) =>
             [...r.querySelectorAll('.bar')].map((track) => {
@@ -96,15 +116,36 @@ app.whenReady().then(async () => {
     ck('恶意 id 原样保留在 dataset 中', res.rowIds[0] === 'inj"><img src=x onerror="window.__xssId=1', JSON.stringify(res.rowIds[0]));
     ck('自动刷新链路存活（修复前 lastUpdated 停在 "—"）', res.lastUpdated.startsWith('更新于'), JSON.stringify(res.lastUpdated));
     ck('恶意 id 那行读数正常', res.injPcts.length === 2 && res.injPcts[0] === '42.5%', JSON.stringify(res.injPcts));
-    ck('P3-A 形状随数据（plan 收到 balance → 1 条 bar）', res.p2Pcts.length === 1 && res.p2Pcts[0] === 'CNY 30.00', JSON.stringify(res.p2Pcts));
+    ck('P3-A 形状随数据（plan 收到 balance → 1 条 bar）', res.p2Pcts.length === 1 && res.p2Pcts[0] === '30.00', JSON.stringify(res.p2Pcts));
     ck('bar 宽度与百分比成正比（实测 5h 42.5 / 7d 88）', Math.abs(res.barsByRow[0][0] - 42.5) < 1 && Math.abs(res.barsByRow[0][1] - 88) < 1, JSON.stringify(res.barsByRow[0]));
     ck('余额中段阈值公式（30 介于 10/50 → 50%）', Math.abs(res.barsByRow[1][0] - 50) < 1, JSON.stringify(res.barsByRow[1]));
     ck('低用量行成正比（实测 10 / 20）', Math.abs(res.barsByRow[3][0] - 10) < 1 && Math.abs(res.barsByRow[3][1] - 20) < 1, JSON.stringify(res.barsByRow[3]));
     ck('错误态行两条 bar 归零', res.barsByRow[2].every((v) => v === 0), JSON.stringify(res.barsByRow[2]));
     ck('错误态写入行内', res.p3Errors.length === 1 && res.p3Errors[0] === 'boom', JSON.stringify(res.p3Errors));
-    ck('provider 列表渲染名称与模式标签', res.modeTags === 4, String(res.modeTags));
-    ck('编辑/删除按钮各 4 个', res.buttons === 8, String(res.buttons));
+    ck('provider 列表渲染名称与模式标签', res.modeTags === 6, String(res.modeTags));
+    ck('编辑/删除按钮各 6 个（共 12）', res.buttons === 12, String(res.buttons));
+    // 第六轮复核 P2-C
+    ck('长余额读数完整显示', res.p6Text === '12345678.00', JSON.stringify(res.p6Text));
+    ck('长余额读数未溢出列宽', res.p6Overflow <= 1, 'overflowPx=' + res.p6Overflow);
+    ck('余额读数有单位说明 tooltip', /不.*换算|原样显示/.test(res.p6Title || ''), JSON.stringify(res.p6Title));
+    // Prove that assertion is discriminating: restore the pre-fix layout and
+    // confirm the same metric then reports overflow.
+    const overflowUnderOldCss = await win.webContents.executeJavaScript(`(() => {
+      const st = document.createElement('style');
+      st.textContent = '.bar-row{grid-template-columns:36px 1fr 36px !important}';
+      document.head.appendChild(st);
+      const el = [...document.querySelectorAll('.usage-item')].find((r) => r.dataset.id === 'p6').querySelector('.bar-pct');
+      const over = el.scrollWidth - el.clientWidth;
+      st.remove();
+      return over;
+    })()`);
+    ck('该断言能判别旧布局（旧 CSS 下确实溢出）', overflowUnderOldCss > 1, 'overflowPx=' + overflowUnderOldCss);
     ck('P2-A HTTP:// 大写协议也触发明文告警', res.httpWarningHidden === false, 'hidden=' + res.httpWarningHidden);
+    // 第六轮复核 P1-A：只报一侧限额时，缺的那侧必须是未知态
+    ck('缺的那侧显示 -- 而不是 0%', res.p5Pcts[0] === '--', JSON.stringify(res.p5Pcts));
+    ck('缺的那侧 bar 是 unknown（不是绿色 ok）', /unknown/.test(res.p5FillClasses[0]) && !/ok|warn|danger/.test(res.p5FillClasses[0]), JSON.stringify(res.p5FillClasses[0]));
+    ck('缺的那侧有解释性 tooltip', /未返回/.test(res.p5PctTitles[0] || ''), JSON.stringify(res.p5PctTitles[0]));
+    ck('有数据的那侧照常显示', res.p5Pcts[1] === '80.0%' && /warn/.test(res.p5FillClasses[1]), JSON.stringify(res.p5Pcts));
     ck('渲染进程无 console 错误', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
   } else if (testCase === 'behavior') {
     // Behavioural (not source-text) assertions for two items the reviewer asked
@@ -131,13 +172,30 @@ app.whenReady().then(async () => {
         out.requestsAfterThresholdChange = (await window.api.getFetchCount()) - before2;
         out.pctsUnchanged = JSON.stringify(pctsBefore) === JSON.stringify(pcts());
         out.widthsAfter = [...document.querySelectorAll('.bar-fill')].map((e) => e.style.width);
+
+        // 3) P3-6: a manual refresh while a round is in flight used to do
+        //    nothing at all. Slow pollOne down so the window is deterministic.
+        const origPollOne = pollOne;
+        pollOne = () => new Promise((r) => setTimeout(r, 400));
+        const firstStarted = pollAll();          // starts a round (in flight ~400ms)
+        const secondStarted = await pollAll();   // must decline, not queue a second
+        document.getElementById('refreshBtn').click();
+        await wait(80);
+        out.refreshHint = document.getElementById('lastUpdated').textContent;
+        out.secondPollStarted = secondStarted;
+        await firstStarted;
+        pollOne = origPollOne;
+        out.firstPollStarted = true;
         return JSON.stringify(out);
       })()`),
     );
     console.log('DOM ' + JSON.stringify(res));
-    ck('两次重叠轮询只发一轮请求（4 个 provider → 4 次）', res.requestsForTwoPolls === res.providerCount, JSON.stringify(res.requestsForTwoPolls) + ' vs ' + res.providerCount);
+    ck('两次重叠轮询只发一轮请求（每个 provider 恰好 1 次）', res.requestsForTwoPolls === res.providerCount, JSON.stringify(res.requestsForTwoPolls) + ' vs ' + res.providerCount);
     ck('阈值变更不发任何请求', res.requestsAfterThresholdChange === 0, String(res.requestsAfterThresholdChange));
     ck('阈值变更后读数由缓存重绘（未清空）', res.pctsUnchanged === true, JSON.stringify(res.pctsUnchanged));
+    // 第六轮复核 P3-6
+    ck('轮询进行中再次触发会明确拒绝（不排队第二轮）', res.secondPollStarted === false, String(res.secondPollStarted));
+    ck('刷新中点击 ↻ 有可见反馈', res.refreshHint === '正在刷新，请稍候…', JSON.stringify(res.refreshHint));
   } else if (testCase === 'savefail') {
     // P1-C: saveProviders() rejecting must surface a visible error and must NOT
     // render a row that only exists in memory.
@@ -149,11 +207,21 @@ app.whenReady().then(async () => {
         document.getElementById('providerForm').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
         await new Promise((r) => setTimeout(r, 300));
         const el = document.getElementById('saveError');
-        return JSON.stringify({
+        const before = {
           hidden: el.classList.contains('hidden'),
           text: el.textContent,
           rowsShown: document.querySelectorAll('#usageList .usage-item').length,
           formStillFilled: document.getElementById('providerName').value,
+        };
+        // P1-B: the failure must not leave a GHOST entry in state. Triggering a
+        // later full re-render is what used to expose it (e.g. after deleting
+        // some other provider). Nothing may appear here.
+        renderAll();
+        renderProviderList();
+        return JSON.stringify({
+          ...before,
+          rowsAfterRenderAll: document.querySelectorAll('#usageList .usage-item').length,
+          listedAfterRenderAll: document.querySelectorAll('#providerList li').length,
         });
       })()`),
     );
@@ -162,6 +230,9 @@ app.whenReady().then(async () => {
     ck('横幅含 IPC rejection 原因', /保存失败/.test(res.text) && /read-only/.test(res.text), JSON.stringify(res.text));
     ck('未渲染"假保存成功"的行', res.rowsShown === 0, String(res.rowsShown));
     ck('表单内容保留（用户不用重输）', res.formStillFilled === 'Unsaveable', res.formStillFilled);
+    // 第六轮复核 P1-B：失败后任何一次重绘都不得冒出幽灵订阅
+    ck('再次 renderAll() 后仍无幽灵行', res.rowsAfterRenderAll === 0, String(res.rowsAfterRenderAll));
+    ck('设置面板列表也没有幽灵条目', res.listedAfterRenderAll === 0, String(res.listedAfterRenderAll));
     ck('渲染进程无 console 错误（无未处理 rejection）', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
   } else if (testCase === 'ipcfail') {
     // P1-C for the other three call sites: a rejected deleteProvider must roll
@@ -284,5 +355,6 @@ app.whenReady().then(async () => {
 
   console.log('dom.test(' + testCase + '): ' + pass + ' passed, ' + failures.length + ' failed');
   if (failures.length) console.log('Failed:\n- ' + failures.join('\n- '));
+  cleanup(); // before app.exit(): quit handlers never fire
   app.exit(failures.length ? 1 : 0);
 });
