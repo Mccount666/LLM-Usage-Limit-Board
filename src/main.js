@@ -465,6 +465,13 @@ function safeMessage(msg, apiKey) {
   return s.slice(0, 120);
 }
 
+/** Pull the gateway's own words (message/error/msg) out of a JSON body. */
+function gatewayMessage(body) {
+  if (!body || typeof body !== 'object') return '';
+  const m = body.message ?? body.error ?? body.msg;
+  return typeof m === 'string' && m.trim() ? m : '';
+}
+
 function explainProbeFailure(diag, provider, mode) {
   const auth = diag.statuses.find((s) => s === 401 || s === 403);
   if (auth) {
@@ -495,7 +502,14 @@ function explainProbeFailure(diag, provider, mode) {
   }
   const gateway = diag.messages.find(Boolean);
   if (gateway) {
-    return `服务商拒绝了请求：${gateway}。若 Key 无误，请把该接口的返回 JSON 发给我适配${mode === 'plan' ? ' 5h/周 限额' : '余额'}字段`;
+    // N-26: the gateway branch was the only four-bucket exit that never showed
+    // the tally — a probe of 1 gateway message + 3×404 hid the 404s entirely.
+    // Deliberately NO "另有/其余" quantifier: the candidate that spoke may
+    // itself be one of the counted statuses (a 404 body CAN carry a gateway
+    // message — non-2xx bodies are message-parsed since N-28 (a)), so the
+    // tally describes the whole probe set, not "the rest".
+    const mix = tally();
+    return `服务商拒绝了请求：${gateway}${mix ? `（${mix}）` : ''}。若 Key 无误，请把该接口的返回 JSON 发给我适配${mode === 'plan' ? ' 5h/周 限额' : '余额'}字段`;
   }
   const notFound =
     diag.responded === 0 && diag.statuses.length > 0 && diag.statuses.every((s) => s === 404);
@@ -550,8 +564,12 @@ function probeCandidates(provider, kind, paths, headers, accept, diag) {
     else if (res.parseError) diag.unusable++; // answered 200, body not JSON (N-20)
     else if (res.status) diag.statuses.push(res.status);
     else if (res.error) diag.errors.push(res.error); // no response at all
-    const body = res.data;
-    const msg = body && typeof body === 'object' ? body.message ?? body.error ?? body.msg : '';
+    // N-28 (a): a non-2xx candidate can carry a gateway message too
+    // (bodyMessage, parsed in tryFetchJson). It is masked/truncated here
+    // exactly like a 200-body message, and the response KEEPS being counted
+    // in `statuses` — the speaking candidate stays inside the tally, which is
+    // why the gateway branch deliberately carries no "另有" quantifier.
+    const msg = gatewayMessage(res.data) || res.bodyMessage || '';
     if (typeof msg === 'string' && msg.trim()) diag.messages.push(safeMessage(msg, provider.apiKey));
   };
 
@@ -666,7 +684,20 @@ async function tryFetchJson(url, provider, extraHeaders = {}) {
     // redirect:'error' enforces the privacy contract: an outbound request
     // must not silently follow a 30x to a different host.
     const res = await fetch(url, { headers, signal: ctrl.signal, redirect: 'error' });
-    if (!res.ok) return { ok: false, status: res.status };
+    if (!res.ok) {
+      // N-28 (a): a non-2xx body can still carry the actionable gateway
+      // message (reviewer probe ⑤v5: a 404 with {"message":"gateway says no"}
+      // used to be swallowed into "所有候选路径均返回 404"). The parse is
+      // bounded in effect: a non-JSON body contributes NOTHING (no new
+      // counting category — the response still lands in `statuses` via
+      // note()), and whatever message is found goes through safeMessage
+      // masking/truncation in note() before it can reach the UI.
+      let bodyMessage = '';
+      try {
+        bodyMessage = gatewayMessage(await res.json());
+      } catch { /* non-JSON body — counted by status only */ }
+      return { ok: false, status: res.status, bodyMessage };
+    }
     let data;
     try {
       data = await res.json();

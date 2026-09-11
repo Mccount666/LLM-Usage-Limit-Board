@@ -115,6 +115,34 @@ t('吸收行为不因 trim 收紧：周边空白仍可解析', () => {
   assert.strictEqual(r.amount, 7.5);
 });
 
+console.log('--- N-25: 非 number/string 不得被 Number() 收编成 0（第十轮探针输出转正） ---');
+t('numOf([]) -> null（曾收编为 0）', () => assert.strictEqual(numOf([]), null));
+t('numOf(false) -> null（曾收编为 0）', () => assert.strictEqual(numOf(false), null));
+t('numOf(true)/numOf({}) -> null（同一收编面）', () => {
+  assert.strictEqual(numOf(true), null);
+  assert.strictEqual(numOf({}), null);
+});
+t('parseLimit([]) -> null（曾得 {value:0}）', () => assert.strictEqual(parseLimit([]), null));
+t('红线①：used:[] 不得渲染成 0%', () => {
+  assert.strictEqual(detectLimitPct({ five_hour: { used: [], total: 100 } }, FIVE_HOUR_SPEC), null);
+});
+t('红线②：balance:[] / quota:false 不得伪造余额 0', () => {
+  assert.strictEqual(normalizeBalance({ data: { balance: [] } }), null);
+  assert.strictEqual(normalizeBalance({ data: { quota: false } }), null);
+});
+t('真 number 仍然保留：numOf(0)/numOf(42)/{remain:0}', () => {
+  assert.strictEqual(numOf(0), 0);
+  assert.strictEqual(numOf(42), 42);
+  assert.strictEqual(normalizeBalance({ data: { remain: 0 } }).amount, 0);
+  assert.strictEqual(detectLimitPct({ five_hour: { used: 30, total: 100 } }, FIVE_HOUR_SPEC), 30);
+});
+t('数字字符串与百分号路径不受影响（既有行为钉住）', () => {
+  assert.strictEqual(numOf('42'), 42);
+  assert.strictEqual(numOf('42%'), 42);
+  assert.deepStrictEqual(parseLimit(42), { value: 42, explicit: false });
+  assert.strictEqual(normalizeBalance({ data: { balance: '12.5' } }).amount, 12.5);
+});
+
 console.log('\nlimits.test: ' + pass + ' passed, ' + failures.length + ' failed');
 if (failures.length) {
   console.log('\nFailed:\n- ' + failures.join('\n- '));

@@ -85,13 +85,52 @@ function clearDist() {
 // Review round 9 (misc ②): "exit 0" has previously coexisted with an empty
 // dist/ (the win-unpacked incident the report caught mid-build). Success is
 // only success when a non-empty Setup.exe actually landed.
-function findSetupArtifact() {
+//
+// N-27 (round 11): "landed" must mean landed BY THIS ATTEMPT. dist/ is not
+// cleared at startup (a previous run's Setup.exe can still be in there) and
+// the final attempt deliberately keeps the previous dist/ (a failed attempt's
+// half-written Setup.exe can still be in there) — either could satisfy a
+// mere-existence check and ride out on a green exit code (reviewer sandbox
+// S1/S2). So every attempt snapshots the Setup*.exe signature (mtime+size)
+// before spawning, and a hit only counts when its signature is absent from
+// the snapshot, i.e. the file (re)appeared while this attempt was running. A
+// genuine rebuild overwriting the same name gets a fresh mtime and still
+// passes; anything this attempt did not touch is somebody else's artefact.
+function setupArtefactSnapshot() {
+  const dist = path.join(__dirname, '..', 'dist');
+  const known = new Map();
+  try {
+    for (const f of fs.readdirSync(dist)) {
+      if (!/setup.*\.exe$/i.test(f)) continue;
+      const st = fs.statSync(path.join(dist, f));
+      if (st.size > 0) known.set(f, st.mtimeMs + ':' + st.size);
+    }
+  } catch {
+    // no dist/ yet — nothing can be stale
+  }
+  return known;
+}
+
+function findSetupArtifact(known) {
   const dist = path.join(__dirname, '..', 'dist');
   try {
-    const hit = fs.readdirSync(dist).find((f) => /setup.*\.exe$/i.test(f));
-    if (!hit) return null;
-    const full = path.join(dist, hit);
-    return fs.statSync(full).size > 0 ? full : null;
+    // N-29 (round 12): "a fresh artefact exists" is an ∃ statement over ALL
+    // Setup*.exe, not a statement about the first one in directory order. The
+    // old `.find()` + early return let a stale leftover that sorted first mask
+    // a freshly landed artefact behind it (reviewer sandbox A1: "no Setup.exe
+    // landed" while the real artefact sat in dist/, then clearDist() wiped it
+    // and a whole extra build was burned). Walk every match: any signature
+    // absent from the snapshot is a hit; only when every non-empty match is a
+    // snapshot leftover is there no fresh artefact.
+    for (const f of fs.readdirSync(dist)) {
+      if (!/setup.*\.exe$/i.test(f)) continue;
+      const full = path.join(dist, f);
+      const st = fs.statSync(full);
+      if (st.size === 0) continue; // an empty file is not an artefact (A2)
+      if (known.get(f) === st.mtimeMs + ':' + st.size) continue; // untouched leftover
+      return full;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -107,17 +146,31 @@ for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       clearDist();
     }
   }
+  const known = setupArtefactSnapshot();
   const res = spawnSync(process.execPath, [cli, ...args], { stdio: 'inherit', env: process.env });
   if (res.status === 0) {
-    const artefact = findSetupArtifact();
+    const artefact = findSetupArtifact(known);
     if (artefact) {
       console.log('[dist] artefact: ' + artefact + ' (' + fs.statSync(artefact).size + ' bytes)');
       process.exit(0);
     }
     console.error('[dist] electron-builder exited 0 but no Setup.exe landed in dist/ — treating as a failure');
+    if (findSetupArtifact(new Map())) {
+      // N-29: with the walk-everything gate above, reaching this line means
+      // every non-empty Setup.exe carries a snapshot signature — the old
+      // first-hit blind spot (a fresh artefact hidden behind a stale one) is
+      // gone, so this hint can no longer fire while a fresh artefact exists.
+      console.error('[dist]   (every non-empty Setup.exe in dist/ predates this attempt — not accepting them as this build\'s artefact)');
+    }
   }
   if (attempt === MAX_ATTEMPTS) {
     console.error('[dist] build failed after ' + MAX_ATTEMPTS + ' attempts');
-    process.exit(res.status === null ? 1 : res.status);
+    // N-24: a final attempt where electron-builder "succeeds" (exit 0) without
+    // landing a Setup.exe used to fall through here with res.status === 0 and
+    // EXIT 0 — the exact "exit 0 but no artefact" failure this gate exists to
+    // catch (the reviewer's sandbox reproduced it). `|| 1` makes every
+    // terminal failure non-zero: a real builder exit code is preserved, and
+    // both 0 and null (spawn error / killed by signal) become 1.
+    process.exit(res.status || 1);
   }
 }

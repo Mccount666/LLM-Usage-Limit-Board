@@ -139,7 +139,12 @@ t('P2-3c http 明文告警存在', () => {
 t('P2-4 normalizeBalance 按键名遍历并跳空值', () => {
   matches(LIMITS, /const FIELDS = \['balance', 'remain', 'remaining', 'quota', 'credit'\]/);
   // N-19: whitespace-only strings must be skipped too — Number(' ') === 0.
-  matches(LIMITS, /if \(v == null \|\| \(typeof v === 'string' && v\.trim\(\) === ''\)\) continue/);
+  // N-25 split the guard: non-number/non-string values (Number([]) === 0,
+  // Number(false) === 0) are now skipped BEFORE the trim check, so the old
+  // single-line condition is replaced by the stronger two-step form below —
+  // updated per the new behavior, not loosened.
+  matches(LIMITS, /if \(v == null \|\| \(typeof v !== 'number' && typeof v !== 'string'\)\) continue/);
+  matches(LIMITS, /if \(typeof v === 'string' && v\.trim\(\) === ''\) continue/);
   assert.ok(!/amount \/ 100/.test(LIMITS), 'must not convert units by guessing');
   matches(LIMITS, /return \{ amount: n, currency: '', field: key \}/);
 });
@@ -407,6 +412,36 @@ t('杂项 dist.js 成功路径必须校验 Setup.exe 落地且非零字节', () 
   const DIST = read('tools/dist.js');
   matches(DIST, /findSetupArtifact/);
   notMatches(DIST, /if \(res\.status === 0\) process\.exit\(0\)/);
+});
+t('N-24 终局失败必须非零退出（字面守卫：只防旧可空三元字面回潮，行为由 test/dist.test.js 三案守）', () => {
+  const DIST = read('tools/dist.js');
+  matches(DIST, /process\.exit\(res\.status \|\| 1\)/);
+  notMatches(DIST, /res\.status === null \? 1 : res\.status/);
+});
+t('N-25 非 number/string 按缺失处理（字面守卫：三处收编闸门在位，行为由 limits.test.js N-25 段守）', () => {
+  const L = strip(LIMITS);
+  matches(L, /if \(typeof v !== 'number'\) return null;/);
+  matches(L, /typeof v !== 'number' && typeof v !== 'string'/);
+});
+t('N-26 网关话术分支必须附 tally（字面守卫，行为由 ipc.test.js ⑤/⑤b/⑥ 守）', () => {
+  matches(strip(MAIN), /if \(gateway\) \{\s*const mix = tally\(\);/);
+});
+t('N-27 产物关卡只认本次构建新落的产物（字面守卫：快照+签名比对在位；签名字面量随 N-29 重写去名化，行为由 dist.test.js Case 4-6 守）', () => {
+  const DIST = read('tools/dist.js');
+  matches(DIST, /setupArtefactSnapshot/);
+  matches(DIST, /known\.get\([A-Za-z]\) === st\.mtimeMs \+ ':' \+ st\.size/);
+});
+t('N-29 存在性判定是 ∃ 命题：findSetupArtifact 必须遍历全部 Setup*.exe（字面守卫：只防旧 .find() 首命中早退形回潮，行为由 dist.test.js Case 7/8 守）', () => {
+  const DIST = read('tools/dist.js');
+  notMatches(DIST, /readdirSync\(dist\)\.find\(/);
+  // snapshot and gate each walk dist/ — one loop means the gate delegates to
+  // the snapshot's narrow view again, which is exactly the N-29 shape
+  const loops = (DIST.match(/for \(const [A-Za-z] of fs\.readdirSync\(dist\)\)/g) || []).length;
+  assert.ok(loops >= 2, 'findSetupArtifact must walk dist/ itself, found ' + loops + ' readdirSync loop(s)');
+});
+t('N-28a 非 2xx body 的网关话术必须进 diag（字面守卫：有界解析在位，行为由 ipc.test.js ⑤v5/⑤v5b 守）', () => {
+  matches(MAIN, /bodyMessage/);
+  matches(strip(MAIN), /function gatewayMessage\(body\)/);
 });
 
 console.log('\nreport-items.test: ' + pass + ' passed, ' + failures.length + ' failed');

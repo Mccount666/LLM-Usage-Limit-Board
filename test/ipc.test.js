@@ -512,6 +512,95 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.strictEqual(calls.length - callsBefore, 4, 'requests: ' + (calls.length - callsBefore));
   });
 
+  console.log('--- N-26：网关话术分支也必须附其余候选的分类计数 ---');
+  await t('⑤ 200+网关话术 + 其余 404 → 话术 + 「3 个候选返回 404」（N-26，探针转正）', async () => {
+    await reseed();
+    setRoutes([
+      { match: '/api/user/self', status: 200, body: { success: false, message: 'quota exhausted' } },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /服务商拒绝了请求：quota exhausted/, r.error);
+    // the 3×404 must not disappear behind the gateway quote (N-26)
+    assert.match(r.error, /3 个候选返回 404/, r.error);
+  });
+  await t('⑤b 纯网关话术（无其它类别）→ 不附空 tally，文案不变', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/', status: 200, body: { success: false, message: '无权进行此操作' } }]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /服务商拒绝了请求：无权进行此操作。/, r.error);
+    assert.ok(!/候选返回/.test(r.error), 'no empty tally: ' + r.error);
+  });
+  await t('⑥ 503+404 混合 → 字段兜底头部 + tally 如实列出状态码（本轮决定不改头部措辞，见反馈 §十八）', async () => {
+    await reseed();
+    setRoutes([
+      { match: '/api/user/self', status: 503, body: {} },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /找不到 5h\/周 限额字段/, r.error);
+    assert.match(r.error, /4 个候选返回 503\/404/, r.error);
+  });
+  await t('⑤v5 404+JSON body 带话术 → 话术不被吞，tally 含说话候选（N-28a，探针转正）', async () => {
+    await reseed();
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: { message: 'gateway says no' } },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    // pre-N-28 this fell through to 「所有候选路径均返回 404」 and the message died
+    assert.match(r.error, /服务商拒绝了请求：gateway says no/, r.error);
+    // the speaking candidate is itself one of the 404s — the neutral tally
+    // counts the whole probe set, so it must say 4, not 3, and no "另有"
+    assert.match(r.error, /4 个候选返回 404/, r.error);
+    assert.ok(!/所有候选路径均返回 404/.test(r.error), 'gateway words must win over notFound: ' + r.error);
+  });
+  await t('⑤v5b 404 body 非 JSON（解析失败）→ 不产生话术也不产生新类别，仍按 404 计数（N-28a 边界）', async () => {
+    await reseed();
+    // jsonThrows = res.json() rejects — the bounded-parse catch path. It must
+    // contribute nothing: no gateway message, no new counting category.
+    setRoutes([
+      { match: '/api/user/self', status: 404, jsonThrows: true },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    // pure 404 stays pure: the plain notFound wording, no tally classes invented
+    assert.match(r.error, /所有候选路径均返回 404/, r.error);
+    assert.ok(!/服务商拒绝了请求/.test(r.error), 'a failed parse must not fabricate a gateway message: ' + r.error);
+    assert.ok(!/无响应|内容不可用/.test(r.error), 'no phantom counting classes: ' + r.error);
+  });
+  await t('⑤v6 404+泛化话术（"Not Found"）→ 网关分支头部 + tally 如实列出（第十二轮裁决转正：接受现状、不设过滤）', async () => {
+    await reseed();
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: { message: 'Not Found' } },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    // Round-12 verdict (报告第十二部分·五): speak-first, tally-always, NO
+    // generic-phrase filter — any blacklist would eventually mis-swallow some
+    // gateway's real custom message. Pinned so neither a filter nor a
+    // notFound-branch fallback can creep back in unnoticed.
+    assert.match(r.error, /服务商拒绝了请求：Not Found/, r.error);
+    assert.match(r.error, /4 个候选返回 404/, r.error);
+    assert.ok(!/所有候选路径均返回 404/.test(r.error), 'generic words still win over notFound: ' + r.error);
+  });
+
   console.log('--- 只报一侧限额：另一侧必须是 null，不能被伪造成 0 ---');
   await t('只有周限额时 fiveHourPct 为 null（不是 0）', async () => {
     await reseed();

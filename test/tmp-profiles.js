@@ -15,7 +15,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const PREFIXES = ['llmb-dom-', 'llmb-tray-'];
+// `llmb-dist-` is the dist.test.js subprocess sandbox (also pid-named, same
+// sweep rules) — added when that suite joined the npm test chain (N-24).
+const PREFIXES = ['llmb-dom-', 'llmb-tray-', 'llmb-dist-'];
 
 /** Is a pid still running? EPERM means "exists but not ours" → alive. */
 function pidAlive(pid) {

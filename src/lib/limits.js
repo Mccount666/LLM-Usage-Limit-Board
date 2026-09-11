@@ -85,8 +85,12 @@ function numOf(v) {
     const n = Number(s);
     return Number.isFinite(n) ? n : null;
   }
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+  // N-25: `Number([]) === 0` and `Number(false) === 0` — arrays and booleans
+  // would be absorbed into a confident 0 exactly the way whitespace was
+  // (N-19). Anything that is not a number and not a numeric string is
+  // MISSING data, not a zero.
+  if (typeof v !== 'number') return null;
+  return Number.isFinite(v) ? v : null;
 }
 
 /**
@@ -105,8 +109,9 @@ function parseLimit(v) {
     const n = Number(s);
     return Number.isFinite(n) ? { value: n, explicit: false } : null;
   }
-  const n = Number(v);
-  return Number.isFinite(n) ? { value: n, explicit: false } : null;
+  // N-25: same absorption trap as numOf — Number([])/Number(false) are 0.
+  if (typeof v !== 'number') return null;
+  return Number.isFinite(v) ? { value: v, explicit: false } : null;
 }
 
 /** A ratio (<= 1) becomes a percentage; anything larger is already one. */
@@ -175,9 +180,12 @@ function normalizeBalance(root) {
   const FIELDS = ['balance', 'remain', 'remaining', 'quota', 'credit'];
   for (const key of FIELDS) {
     const v = r?.[key];
-    // N-19: `v === ''` missed whitespace-only strings, and Number(' ') === 0
-    // turned "no balance data" into a confident 0. Trim, then judge.
-    if (v == null || (typeof v === 'string' && v.trim() === '')) continue;
+    // N-25: only numbers and numeric strings are balance data. `Number([])`
+    // and `Number(false)` are both 0, so an array/boolean field would forge a
+    // confident "balance 0" — the same absorption axis as N-19's whitespace.
+    if (v == null || (typeof v !== 'number' && typeof v !== 'string')) continue;
+    // N-19: `Number(' ') === 0` turned "no balance data" into a 0. Trim first.
+    if (typeof v === 'string' && v.trim() === '') continue;
     const n = Number(v);
     if (Number.isFinite(n)) return { amount: n, currency: '', field: key };
   }
