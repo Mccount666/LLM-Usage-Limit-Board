@@ -16,6 +16,10 @@ const root = path.join(__dirname, '..', '..');
 // Isolate persistent state (localStorage: balance thresholds) per run — the
 // `behavior` case changes the thresholds, and sharing a profile made later
 // cases assert against the mutated values.
+const { sweepStale, scheduleCleanup } = require('../tmp-profiles');
+const swept = sweepStale(['llmb-dom-']);
+if (swept) console.log('swept ' + swept + ' stale profile(s) left by earlier runs');
+
 const dataDir = path.join(os.tmpdir(), 'llmb-dom-' + process.pid);
 app.setPath('userData', dataDir);
 
@@ -28,7 +32,7 @@ let cleaned = false;
 function cleanup() {
   if (cleaned) return;
   cleaned = true;
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  scheduleCleanup(dataDir); // deletes now, or via a detached helper after exit
 }
 process.on('exit', cleanup);
 
@@ -186,6 +190,17 @@ app.whenReady().then(async () => {
         await firstStarted;
         pollOne = origPollOne;
         out.firstPollStarted = true;
+
+        // 4) P1-6: a NEW provider with no key must be refused before any IPC
+        const savesBefore = await window.api.getSaveCount();
+        document.getElementById('providerName').value = 'No Key';
+        document.getElementById('providerBaseUrl').value = 'https://nk.example.com';
+        document.getElementById('providerApiKey').value = '';
+        document.getElementById('providerId').value = '';
+        document.getElementById('providerForm').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+        await wait(150);
+        out.savesForNoKey = (await window.api.getSaveCount()) - savesBefore;
+        out.rowsForNoKey = document.querySelectorAll('#usageList .usage-item').length;
         return JSON.stringify(out);
       })()`),
     );
@@ -196,6 +211,9 @@ app.whenReady().then(async () => {
     // 第六轮复核 P3-6
     ck('轮询进行中再次触发会明确拒绝（不排队第二轮）', res.secondPollStarted === false, String(res.secondPollStarted));
     ck('刷新中点击 ↻ 有可见反馈', res.refreshHint === '正在刷新，请稍候…', JSON.stringify(res.refreshHint));
+    // P1-6
+    ck('新增订阅不填 Key 时不会发起保存', res.savesForNoKey === 0, String(res.savesForNoKey));
+    ck('也不会多出一行', res.rowsForNoKey === res.providerCount, JSON.stringify(res.rowsForNoKey));
   } else if (testCase === 'savefail') {
     // P1-C: saveProviders() rejecting must surface a visible error and must NOT
     // render a row that only exists in memory.
@@ -241,7 +259,10 @@ app.whenReady().then(async () => {
     const res = JSON.parse(
       await win.webContents.executeJavaScript(`(async () => {
         const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        const pcts = () => [...document.querySelectorAll('.usage-item')].map((r) =>
+          [...r.querySelectorAll('.bar-pct')].map((e) => e.textContent));
         const rowsBefore = [...document.querySelectorAll('.usage-item')].map((r) => r.dataset.id);
+        const pctsBefore = pcts();
         // provider list: [edit, del] per row → index 1 is the first row's delete
         document.querySelectorAll('#providerList button')[1].click();
         await wait(300);
@@ -253,6 +274,8 @@ app.whenReady().then(async () => {
         return JSON.stringify({
           rowsBefore,
           rowsAfter,
+          pctsBefore,
+          pctsAfterRollback: pcts(),
           errorHidden: el.classList.contains('hidden'),
           errorText: el.textContent,
         });
@@ -261,6 +284,9 @@ app.whenReady().then(async () => {
     console.log('DOM ' + JSON.stringify(res));
     ck('删除失败后行回滚（UI 不显示未落盘的删除）', JSON.stringify(res.rowsAfter) === JSON.stringify(res.rowsBefore), JSON.stringify(res.rowsAfter));
     ck('删除失败有可见提示', res.errorHidden === false && /删除失败/.test(res.errorText), JSON.stringify(res.errorText));
+    // N-14: the rollback must restore the usage cache too — otherwise the
+    // rolled-back row loses its readings ("--") until the next poll.
+    ck('回滚后读数原样保留（缓存一并恢复，不退回 --）', JSON.stringify(res.pctsAfterRollback) === JSON.stringify(res.pctsBefore), JSON.stringify(res.pctsAfterRollback));
     ck('窗口按钮 reject 不产生未处理 rejection', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
   } else if (testCase === 'firstrun') {
     // Privacy notice: shown on first launch, remembered after dismissal.

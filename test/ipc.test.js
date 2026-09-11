@@ -88,6 +88,7 @@ global.fetch = async (url, opts = {}) => {
   for (const r of routes) {
     if (url.includes(r.match)) {
       if (r.delay) await new Promise((res) => setTimeout(res, r.delay));
+      if (r.throw) throw r.throw; // simulate timeout / DNS / refused
       return { ok: r.status === 200, status: r.status, json: async () => r.body };
     }
   }
@@ -391,6 +392,38 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.match(r.error, /\*\*\*/);
   });
 
+  console.log('--- 网络层失败（七-P3：不能误报成「找不到字段」）---');
+  await t('200 但字段不可用 + 其余 404 → 报字段问题，不报 Base URL', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/user/self', status: 200, body: { data: { maybe: 1 } } }]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /找不到/, r.error);
+    assert.ok(!/404|Base URL/.test(r.error), 'must not blame the URL: ' + r.error);
+  });
+  await t('全部候选网络失败 → 归类为请求失败/网络层', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/', throw: new Error('connect ECONNREFUSED 127.0.0.1:443') }]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /请求失败|网络层/, r.error);
+    assert.ok(!/找不到/.test(r.error), 'must not blame field names: ' + r.error);
+  });
+  await t('超时（AbortError）→ 明确说超时', async () => {
+    await reseed();
+    const abortErr = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
+    setRoutes([{ match: '/api/', throw: abortErr }]);
+    assert.match((await fetchUsage('p1')).error, /超时/);
+  });
+  await t('余额模式同样归类网络层（走 explainProbeFailure 的另一分支）', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/', throw: new Error('getaddrinfo ENOTFOUND gw.example.com') }]);
+    const r = await fetchUsage('p2');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /请求失败|网络层/, r.error);
+    assert.ok(!/找不到/.test(r.error), r.error);
+  });
+
   console.log('--- 只报一侧限额：另一侧必须是 null，不能被伪造成 0 ---');
   await t('只有周限额时 fiveHourPct 为 null（不是 0）', async () => {
     await reseed();
@@ -410,6 +443,16 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
   });
 
   console.log('--- 行为验证（取代只匹配源码的文本断言）---');
+  await t('P1-5 删除后缓存失效：被删的订阅不再可查', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/user/self', status: 200, body: { data: { five_hour: { used: 1, total: 4 } } } }]);
+    assert.strictEqual((await fetchUsage('p1')).ok, true);
+    await handlers['providers:delete'](null, 'p1');
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /订阅不存在/);
+    assert.ok((await load()).every((p) => p.id !== 'p1'), 'delete must persist');
+  });
   await t('P2-3 读取侧：磁盘上被改成 file:// 也要拦住', async () => {
     // Simulates a hand-edited / migrated providers.json — the write-side check
     // never ran for this file.
@@ -471,4 +514,8 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     console.log('\nFailed:\n- ' + failures.join('\n- '));
     process.exit(1);
   }
-})().catch((err) => { console.error('harness error', err); process.exit(1); });
+})().catch((err) => {
+  console.error('harness error', err);
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ }
+  process.exit(1);
+});

@@ -17,8 +17,22 @@ const os = require('os');
 const path = require('path');
 const Module = require('module');
 
+const { sweepStale, scheduleCleanup } = require('./tmp-profiles');
+const swept = sweepStale(['llmb-tray-']);
+if (swept) console.log('swept ' + swept + ' stale tray profile(s)');
+
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmb-tray-'));
 app.setPath('userData', dataDir);
+
+// Must run BEFORE app.exit(): exit() emits no 'quit', and process.on('exit')
+// is the backstop for the error path (第六/七轮复核 七-P5).
+let cleaned = false;
+function cleanup() {
+  if (cleaned) return;
+  cleaned = true;
+  scheduleCleanup(dataDir);
+}
+process.on('exit', cleanup);
 
 // ---- capture real objects while letting main.js use the real modules -------
 const created = { trays: [], menus: [], handlers: {} };
@@ -126,9 +140,10 @@ const widgetWindow = () => BrowserWindow.getAllWindows()[0];
 
   console.log('\ntray.test: ' + pass + ' passed, ' + failures.length + ' failed');
   if (failures.length) console.log('Failed:\n- ' + failures.join('\n- '));
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  cleanup();
   app.exit(failures.length ? 1 : 0);
 })().catch((err) => {
   console.error('harness error', err);
+  cleanup(); // 七-P5: the error path used to leave its profile behind
   app.exit(1);
 });

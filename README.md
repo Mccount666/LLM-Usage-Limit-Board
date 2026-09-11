@@ -28,7 +28,7 @@ npm start
 
 首次启动会出现在屏幕右下角，并先显示一次**隐私说明**（点「知道了」后不再出现，确认状态存在本机）；拖标题栏可移动，点 ⚙ 添加订阅。
 
-标题栏按钮：`_` 最小化、`⚙` 设置、`↻` 刷新、`×` 隐藏。窗口是无边框且不占任务栏的，所以**首次最小化/隐藏时会自动在系统托盘生成一个绿色圆点图标**——左键点击或右键菜单「显示看板」即可恢复，右键「退出」退出程序。
+标题栏按钮：`_` 最小化、`⚙` 设置、`↻` 刷新、`×` 隐藏。窗口是无边框且不占任务栏的，所以**首次最小化/隐藏时会自动在系统托盘生成一个图标（与挂件同构的三柱绿色图形）**——左键点击或右键菜单「显示看板」即可恢复，右键「退出」退出程序。
 
 ## 打 exe 分发
 
@@ -69,6 +69,6 @@ npm run test:all  # 上面三个依次跑
 不同服务商返回字段不一致。`src/lib/limits.js` 里的解析逻辑是启发式的：
 
 - **Coding Plan 模式**：从 `/api/user/self` 等接口探测 5h / 周限额字段，关键词匹配（`five_hour` / `5h` / `quota_5h` / `weekly` / `week` / `seven_day` 等变体，支持 `used/total`、`used_percentage`、`"42%"` 三种形态），实现见 `detectLimitPct`
-- **余额模式**：尝试 `/api/user/balance`、`/api/user/wallet`，再 fallback 到 `balance/remain/remaining/quota/credit` 字段。**数值原样显示，不做单位换算、不贴币种**——不同网关的 `quota` 有的是分、有的是元，猜错比不换算更糟（显示的是"多少钱"，不是百分比）
+- **余额模式**：尝试 `/api/user/balance`、`/api/user/wallet`、`/api/user/quota`，再 fallback 到 `balance/remain/remaining/quota/credit` 字段。**数值原样显示，不做单位换算、不贴币种**——不同网关的 `quota` 有的是分、有的是元，猜错比不换算更糟（显示的是"多少钱"，不是百分比）
 
 如果你用的服务商字段名不一样，把那个接口的真实返回 JSON 贴给我（涂掉 key），我帮你改 `detectLimitPct / normalizeBalance`。

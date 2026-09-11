@@ -59,8 +59,8 @@ function drawRGBA(size) {
       for (let b = 0; b < bars.length; b++) {
         const r = bars[b];
         if (x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1) {
-          px = b === 2 ? BAR : b === 1 ? BAR : BAR;
-          if (b === 0) px = BAR_DIM;
+          // the first (shortest) bar is dimmed so the three are distinguishable
+          px = b === 0 ? BAR_DIM : BAR;
           break;
         }
       }

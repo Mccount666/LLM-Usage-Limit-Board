@@ -319,9 +319,32 @@ t('P3-C 候选先到先用 + 记住可用路径', () => {
 t('第五轮 P1-B accept 严格且按调用方区分', () => {
   matches(MAIN, /function hasPlanLimits\(/);
   matches(MAIN, /fetchOneAPIUserInfo\(provider, \(res\) => hasPlanLimits\(/);
-  matches(MAIN, /fetchOneAPIUserInfo\(provider, \(res\) => Boolean\(normalizeBalance\(res\.data\)\)/);
+  matches(MAIN, /viaUserInfo = normalizeBalance\(res\.data\)/);
   // the loose "is an object" test must be gone
   assert.ok(!/typeof root === 'object'\s*;?\s*\}\);/.test(MAIN), 'loose accept still present');
+  // 七-P7: the branch after the strict accept could never be reached
+  assert.ok(
+    !MAIN.includes("if (!normalized) return { ok: false, error: '服务商返回中找不到余额字段' }"),
+    'unreachable balance branch is back',
+  );
+});
+t('第七轮 P3：诊断覆盖网络层（超时/断网不误报为字段问题）', () => {
+  matches(MAIN, /return \{ statuses: \[\], messages: \[\], errors: \[\], responded: 0 \}/);
+  matches(MAIN, /if \(res\.ok\) diag\.responded\+\+/);
+  matches(MAIN, /diag\.responded === 0 && diag\.statuses\.length > 0/);
+  matches(MAIN, /else if \(res\.error\) diag\.errors\.push\(res\.error\)/);
+  matches(MAIN, /if \(diag\.statuses\.length === 0 && diag\.errors\.length > 0\)/);
+  matches(MAIN, /请求超时（10 秒）/);
+  matches(MAIN, /请求失败（网络层）/);
+});
+t('第七轮 P6/P5：图标生成器与测试清理', () => {
+  assert.ok(!/&& false/.test(read('tools/make-icon.js')), 'dead && false branch');
+  // the three-way ternary collapsed to one value
+  assert.ok(!/b === 2 \? BAR : b === 1 \? BAR : BAR/.test(read('tools/make-icon.js')), 'same-value ternary');
+  // failure paths must also clean their temp profile
+  matches(read('test/tray.test.js'), /cleanup\(\); \/\/ 七-P5/);
+  matches(read('test/ipc.test.js'), /fs\.rmSync\(TMP, \{ recursive: true, force: true \}\); \} catch/);
+  matches(read('test/tmp-profiles.js'), /function sweepStale\(/);
 });
 t('失败原因可辨识且不回显 Key', () => {
   matches(MAIN, /function explainProbeFailure\(/);

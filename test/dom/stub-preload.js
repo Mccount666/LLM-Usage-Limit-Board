@@ -27,11 +27,15 @@ const usage = {
 };
 
 let fetchCount = 0;
+let saveCount = 0;
 
 contextBridge.exposeInMainWorld('api', {
   loadProviders: async () => providers,
   getSecurityStatus: async () => ({ encryptionAvailable: true, platform: 'win32' }),
-  saveProviders: async () => ({ ok: true }),
+  saveProviders: async () => {
+    saveCount++;
+    return { ok: true };
+  },
   deleteProvider: async () => ({ ok: true }),
   fetchUsage: async (id) => {
     fetchCount++;
@@ -39,6 +43,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   // Lets the DOM test assert call COUNTS (behaviour) instead of reading source.
   getFetchCount: async () => fetchCount,
+  getSaveCount: async () => saveCount,
   minimizeWindow: async () => {},
   hideWindow: async () => {},
 });

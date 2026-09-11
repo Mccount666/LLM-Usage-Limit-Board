@@ -6,3 +6,8 @@ dist/
 # agent/tool state (not project source)
 .v2c/
 .workbuddy/
+
+# Review-agent forensics tooling (not project source; kept on disk)
+tools/*-forensics.ps1
+tools/inspect-env.ps1
+tools/cleanup-llmb.ps1

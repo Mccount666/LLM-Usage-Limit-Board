@@ -307,6 +307,7 @@ function startEdit(id) {
 async function deleteProvider(id) {
   const idx = state.providers.findIndex((p) => p.id === id);
   const removed = idx >= 0 ? state.providers[idx] : null;
+  const cached = state.lastUsage.get(id); // kept so a failed delete can restore it (N-14)
   state.providers = state.providers.filter((p) => p.id !== id);
   state.lastUsage.delete(id); // drop the cache entry with the provider
   if (els.fId.value === id) resetForm();
@@ -315,8 +316,11 @@ async function deleteProvider(id) {
     if (res?.ok === false) throw new Error(res.error || '删除失败');
   } catch (err) {
     // Roll back to the original position so the UI never shows a deletion that
-    // did not reach disk, and say why (第五轮复核 P1-C).
+    // did not reach disk, and say why (第五轮复核 P1-C). The usage cache is
+    // restored with it: without this the row's readings fall back to "--"
+    // until the next poll (N-14).
     if (removed) state.providers.splice(idx, 0, removed);
+    if (cached) state.lastUsage.set(id, cached);
     renderAll();
     showSaveError(`删除失败：${err?.message || String(err)}`);
     return;
@@ -435,8 +439,19 @@ function applyUsageRow(id, usage, error) {
     e.className = 'usage-error';
     e.textContent = error;
     row.appendChild(e);
-    row.querySelectorAll('.bar-fill').forEach((f) => (f.style.width = '0%'));
-    row.querySelectorAll('.bar-pct').forEach((el) => (el.textContent = '--'));
+    // Reset levels AND the unknown state: a row that previously rendered a
+    // missing-side "--" must not keep the hatched fill / tooltip once it goes
+    // into the error state (第八轮 杂项).
+    row.querySelectorAll('.bar-fill').forEach((f) => {
+      f.classList.remove('ok', 'warn', 'danger', 'unknown');
+      f.classList.add('ok');
+      f.style.width = '0%';
+    });
+    row.querySelectorAll('.bar-pct').forEach((el) => {
+      el.classList.remove('unknown');
+      el.title = '';
+      el.textContent = '--';
+    });
     return;
   }
 
