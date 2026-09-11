@@ -60,7 +60,8 @@ t('P0-3 无 shell:openExternal；shell 未 require', () => {
 t('P0-3b preload 每个通道都有 main handler', () => {
   const chans = [...PRE.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map((m) => m[1]);
   const handlers = [...MAIN.matchAll(/ipcMain\.handle\('([^']+)'/g)].map((m) => m[1]);
-  assert.ok(chans.length >= 8, 'expected >=8 channels, got ' + chans.length);
+  assert.strictEqual(chans.length, 7, 'IPC surface changed — update this inventory');
+  for (const h of handlers) assert.ok(chans.includes(h), 'handler with no caller: ' + h);
   for (const c of chans) assert.ok(handlers.includes(c), 'no handler for ' + c);
 });
 
@@ -190,8 +191,10 @@ t('N-6 pickPct 已删', () => {
 t('N-7 托盘恢复链路完整', () => {
   matches(MAIN, /new Tray\(/);
   matches(MAIN, /ensureTray/);
-  matches(MAIN, /'window:show'/);
-  matches(PRE, /window:show/);
+  // window:show was an unused surface — the tray menu is the single restore path
+  assert.ok(!/'window:show'/.test(MAIN), 'window:show handler should be gone');
+  assert.ok(!/window:show/.test(PRE), 'window:show should not be exposed');
+  matches(MAIN, /function ensureTray/);
 });
 t('N-8 CSP 锁定 script/connect', () => {
   matches(HTML, /script-src 'self'/);
@@ -275,9 +278,17 @@ t('P3-C 候选先到先用 + 记住可用路径', () => {
 t('第五轮 P1-B accept 严格且按调用方区分', () => {
   matches(MAIN, /function hasPlanLimits\(/);
   matches(MAIN, /fetchOneAPIUserInfo\(provider, \(res\) => hasPlanLimits\(/);
-  matches(MAIN, /fetchOneAPIUserInfo\(provider, \(res\) => Boolean\(normalizeBalance\(res\.data\)\)\)/);
+  matches(MAIN, /fetchOneAPIUserInfo\(provider, \(res\) => Boolean\(normalizeBalance\(res\.data\)\)/);
   // the loose "is an object" test must be gone
   assert.ok(!/typeof root === 'object'\s*;?\s*\}\);/.test(MAIN), 'loose accept still present');
+});
+t('失败原因可辨识且不回显 Key', () => {
+  matches(MAIN, /function explainProbeFailure\(/);
+  matches(MAIN, /function safeMessage\(/);
+  matches(MAIN, /diag\.statuses\.find\(\(s\) => s === 401 \|\| s === 403\)/);
+  matches(MAIN, /s\.split\(apiKey\)\.join\('\*\*\*'\)/); // real key value masked
+  matches(MAIN, /replace\(\/\\b\(sk\|xai\|gsk\)-/); // and key-shaped strings
+  matches(MAIN, /return s\.slice\(0, 120\)/);
 });
 
 console.log('--- 打包与文档 ---');

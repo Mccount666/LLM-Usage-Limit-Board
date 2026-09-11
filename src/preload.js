@@ -9,5 +9,4 @@ contextBridge.exposeInMainWorld('api', {
   getSecurityStatus: () => ipcRenderer.invoke('security:status'),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   hideWindow: () => ipcRenderer.invoke('window:hide'),
-  showWindow: () => ipcRenderer.invoke('window:show'),
 });

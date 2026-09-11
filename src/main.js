@@ -71,6 +71,7 @@ function createWidgetWindow() {
     hasShadow: false,
     backgroundColor: '#00000000',
     title: 'LLM Usage Limit Board',
+    icon: path.join(__dirname, 'assets', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -128,7 +129,7 @@ if (!gotLock) {
 
 // 16x16 green dot, inlined so packaging needs no external icon asset.
 const TRAY_ICON_DATA_URL =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAbUlEQVR42mPwutfAQAnGJcHpda8hxOteQzUUh0DFiDIApOGL172G/2j4C1QOrwGLsGhEx4twGVBNhGYYrkY3gBOHs3HhL7AwgRkQQoJmGA5BNqCaDAOqqWoAxV6gOBApjkaqJCSqJGWqZCaSMAAgTixvBdKGYAAAAABJRU5ErkJggg==';
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAkUlEQVR42mNgYGBg8ApKCPAKSrjvFZTwn0gMUhvAANNs6+z/X9/EjiQM0gM2BGQaSEBETIYkDNID0gsy4D8xBih5mIKxtL4msgH/iTbA614DGOtX+dHRANs16WBNMJo+Bkh6mfyXjrYB02QZIF/n819pQQyYHqIGIIeBRqITWAOMBmFQYkI3gOKkTFlmojQ7AwD6ubG/RvQCXQAAAABJRU5ErkJggg==';
 
 let tray = null;
 
@@ -169,7 +170,6 @@ ipcMain.handle('window:hide', () => {
   widgetWindow.hide();
   ensureTray();
 });
-ipcMain.handle('window:show', () => showWidget());
 
 app.on('before-quit', () => {
   if (tray) {
@@ -382,12 +382,9 @@ async function fetchPlanUsage(provider) {
   // Strict accept: a 200 with `{success:false,...}` or a user object without any
   // limit field must NOT be accepted, or it would be cached and the endpoint
   // that does carry 5h/weekly data would never be tried again.
-  const data = await fetchOneAPIUserInfo(provider, (res) => hasPlanLimits(res.data?.data ?? res.data));
-  if (!data) {
-    // Covers both "nothing usable came back" and "no endpoint carried limits".
-    // Keep the actionable hint: field-name adaptation needs the raw JSON.
-    return { ok: false, error: '服务商返回中找不到 5h/周 限额字段，请把接口 JSON 发给我适配' };
-  }
+  const diag = newProbeDiag();
+  const data = await fetchOneAPIUserInfo(provider, (res) => hasPlanLimits(res.data?.data ?? res.data), diag);
+  if (!data) return { ok: false, error: explainProbeFailure(diag, provider, 'plan') };
 
   // Accepted means hasPlanLimits() was true for this exact root, so at least one
   // of the two is non-null — no further emptiness check needed.
@@ -401,6 +398,46 @@ async function fetchPlanUsage(provider) {
       weeklyPct: clampPct(weeklyPct ?? 0),
     },
   };
+}
+
+// --- Failure diagnostics ---------------------------------------------------
+//
+// Probing several endpoints means a failure can come from very different
+// causes: a bad key (401/403), a gateway that answers 200 with
+// `{success:false,message:"…"}` because the key lacks permission, or an
+// endpoint that simply does not carry the fields we need. "找不到字段" for all
+// three sends the user down the wrong path — a wrong API Key is by far the most
+// common and it looked identical to "unsupported provider".
+
+function newProbeDiag() {
+  return { statuses: [], messages: [] };
+}
+
+/** Strip anything that could echo the key back into the UI, then truncate. */
+function safeMessage(msg, apiKey) {
+  if (typeof msg !== 'string' || msg.trim() === '') return '';
+  let s = msg.trim();
+  if (apiKey) s = s.split(apiKey).join('***');
+  s = s.replace(/\b(sk|xai|gsk)-[A-Za-z0-9_\-]{6,}/g, '***');
+  return s.slice(0, 120);
+}
+
+function explainProbeFailure(diag, provider, mode) {
+  const auth = diag.statuses.find((s) => s === 401 || s === 403);
+  if (auth) {
+    return `API Key 无效或权限不足（HTTP ${auth}），请检查该订阅的 Key 是否填错/已失效`;
+  }
+  const gateway = diag.messages.find(Boolean);
+  if (gateway) {
+    return `服务商拒绝了请求：${gateway}。若 Key 无误，请把该接口的返回 JSON 发给我适配${mode === 'plan' ? ' 5h/周 限额' : '余额'}字段`;
+  }
+  const notFound = diag.statuses.length > 0 && diag.statuses.every((s) => s === 404);
+  if (notFound) {
+    return `服务商没有提供可用的用量接口（所有候选路径均返回 404）。请确认 Base URL 是否指向中转站的根地址`;
+  }
+  return mode === 'plan'
+    ? '服务商返回中找不到 5h/周 限额字段，请把接口 JSON 发给我适配'
+    : '服务商返回中找不到余额字段，请把接口 JSON 发给我适配';
 }
 
 
@@ -426,13 +463,22 @@ async function fetchPlanUsage(provider) {
  *
  * @returns the accepted `{ok:true,...}` result, or null
  */
-function probeCandidates(provider, kind, paths, headers, accept) {
+function probeCandidates(provider, kind, paths, headers, accept, diag) {
   const base = provider.baseUrl.replace(/\/+$/, '');
   const key = `${provider.id}:${kind}`;
+
+  const note = (res) => {
+    if (!diag) return;
+    diag.statuses.push(res.status || 0);
+    const body = res.data;
+    const msg = body && typeof body === 'object' ? body.message ?? body.error ?? body.msg : '';
+    if (typeof msg === 'string' && msg.trim()) diag.messages.push(safeMessage(msg, provider.apiKey));
+  };
 
   const remembered = candidatePathCache.get(key);
   if (remembered && paths.includes(remembered)) {
     return tryFetchJson(`${base}${remembered}`, provider, headers).then((res) => {
+      note(res);
       if (res.ok && accept(res)) return res;
       candidatePathCache.delete(key); // stale — rediscover below
       return probeAll();
@@ -452,6 +498,7 @@ function probeCandidates(provider, kind, paths, headers, accept) {
         tryFetchJson(`${base}${path}`, provider, headers)
           .then((res) => {
             if (done) return;
+            note(res);
             if (res.ok && accept(res)) {
               done = true;
               candidatePathCache.set(key, path);
@@ -473,15 +520,16 @@ async function fetchBalanceUsage(provider) {
   // `matched` is set by accept() for the winning candidate only — probeCandidates
   // stops calling accept once a winner is found, so we parse once, not twice (P3-I).
   let matched = null;
+  const diag = newProbeDiag();
   const direct = await probeCandidates(provider, 'balance', balanceCandidates, {}, (res) => {
     matched = normalizeBalance(res.data);
     return matched != null;
-  });
+  }, diag);
   if (direct && matched) return { ok: true, usage: { mode: 'balance', ...matched } };
 
   // Fall back to the same user-info endpoints and look for a balance-like field.
-  const data = await fetchOneAPIUserInfo(provider, (res) => Boolean(normalizeBalance(res.data)));
-  if (!data) return { ok: false, error: '服务商未返回余额字段' };
+  const data = await fetchOneAPIUserInfo(provider, (res) => Boolean(normalizeBalance(res.data)), diag);
+  if (!data) return { ok: false, error: explainProbeFailure(diag, provider, 'balance') };
 
   const normalized = normalizeBalance(data);
   if (!normalized) return { ok: false, error: '服务商返回中找不到余额字段' };
@@ -499,8 +547,10 @@ function hasPlanLimits(root) {
  * @param accept decides whether a candidate response is good enough to use (and
  *   to remember). Callers pass a STRICT test — "it parsed into what I need" —
  *   never "it looks like JSON".
+ * @param diag optional collector for HTTP statuses / gateway messages, so a
+ *   failure can be explained instead of always blaming the field names.
  */
-async function fetchOneAPIUserInfo(provider, accept) {
+async function fetchOneAPIUserInfo(provider, accept, diag) {
   const headers = {
     Authorization: `Bearer ${provider.apiKey}`,
     'Content-Type': 'application/json',
@@ -508,7 +558,7 @@ async function fetchOneAPIUserInfo(provider, accept) {
   };
   const candidates = ['/api/user/self', '/api/user/token', '/api/user/status', '/api/status'];
 
-  const res = await probeCandidates(provider, 'userinfo', candidates, headers, accept);
+  const res = await probeCandidates(provider, 'userinfo', candidates, headers, accept, diag);
   if (!res) return null;
   return res.data?.data ?? res.data;
 }

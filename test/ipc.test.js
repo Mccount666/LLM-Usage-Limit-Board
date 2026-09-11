@@ -13,6 +13,14 @@ const path = require('path');
 const Module = require('module');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'llmb-test-'));
+let encryptionAvailable = true; // flipped by the safeStorage-fallback test
+const dataFile = () => path.join(TMP, 'providers.json');
+const readStore = () => JSON.parse(fs.readFileSync(dataFile(), 'utf8'));
+/** Replace the store on disk and drop the in-memory caches via a no-op delete. */
+async function seedStore(providers) {
+  fs.writeFileSync(dataFile(), JSON.stringify({ version: 1, providers }, null, 2));
+  await handlers['providers:delete'](null, '__no_such_id__');
+}
 const handlers = {};
 const windowCalls = [];
 const trayCalls = [];
@@ -50,7 +58,7 @@ const electronStub = {
   ipcMain: { handle: (ch, fn) => { handlers[ch] = fn; } },
   screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1920, height: 1080 } }) },
   safeStorage: {
-    isEncryptionAvailable: () => true,
+    isEncryptionAvailable: () => encryptionAvailable,
     encryptString: (s) => Buffer.from('enc:' + s, 'utf8'),
     decryptString: (b) => b.toString('utf8').replace(/^enc:/, ''),
   },
@@ -106,8 +114,8 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
 
 (async () => {
   console.log('--- ipc 注册面 ---');
-  await t('8 个通道全部注册', () => {
-    for (const ch of ['providers:load', 'providers:save', 'providers:delete', 'usage:fetch', 'security:status', 'window:minimize', 'window:hide', 'window:show']) {
+  await t('7 个通道全部注册', () => {
+    for (const ch of ['providers:load', 'providers:save', 'providers:delete', 'usage:fetch', 'security:status', 'window:minimize', 'window:hide']) {
       assert.ok(hasHandler(ch), 'missing handler ' + ch);
     }
   });
@@ -263,22 +271,29 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.ok(lastWindow().calls.includes('minimize'), 'minimize() not called');
     assert.strictEqual(trayCalls.length, before, 'tray must be created once');
   });
-  await t('window:show 恢复被最小化的窗口并聚焦', async () => {
-    const w = lastWindow();
-    w.calls.length = 0;
-    await handlers['window:show'](null);
-    assert.deepStrictEqual(w.calls, ['restore', 'show', 'focus'], JSON.stringify(w.calls));
-  });
-  await t('window:show 在窗口未最小化时只 show + focus', async () => {
-    const w = lastWindow();
-    w.calls.length = 0;
-    await handlers['window:show'](null);
-    assert.deepStrictEqual(w.calls, ['show', 'focus'], JSON.stringify(w.calls));
-  });
   await t('托盘菜单提供「显示看板」与「退出」', () => {
     const labels = trayCalls[0].menu.map((m) => m.label).filter(Boolean);
     assert.ok(labels.includes('显示看板'), JSON.stringify(labels));
     assert.ok(labels.includes('退出'), JSON.stringify(labels));
+  });
+  // The tray menu is the ONLY restore path now (the unused window:show IPC
+  // channel was removed to shrink the surface), so it must do the full job.
+  await t('菜单「显示看板」恢复被最小化的窗口并聚焦', async () => {
+    const w = lastWindow();
+    w._minimized = true;
+    w.calls.length = 0;
+    trayCalls[0].menu.find((m) => m.label === '显示看板').click();
+    assert.deepStrictEqual(w.calls, ['restore', 'show', 'focus'], JSON.stringify(w.calls));
+  });
+  await t('窗口未最小化时菜单只 show + focus', async () => {
+    const w = lastWindow();
+    w._minimized = false;
+    w.calls.length = 0;
+    trayCalls[0].menu.find((m) => m.label === '显示看板').click();
+    assert.deepStrictEqual(w.calls, ['show', 'focus'], JSON.stringify(w.calls));
+  });
+  await t('已移除的 window:show 通道确实不存在', () => {
+    assert.ok(!handlers['window:show'], 'window:show should no longer be registered');
   });
 
   console.log('--- 反例测试（第五轮复核 P1-A / P1-B）---');
@@ -334,7 +349,102 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     setRoutes([{ match: '/api/', status: 200, body: { success: false, message: '无权进行此操作' } }]);
     const r = await fetchUsage('p1');
     assert.strictEqual(r.ok, false);
-    assert.match(r.error, /找不到/);
+    // 200 + no usable field must be an explicit failure that quotes the gateway,
+    // not a silent 0%
+    assert.match(r.error, /无权进行此操作/);
+  });
+
+  console.log('--- 失败原因可辨识（key 错误 vs 不支持 vs 无字段）---');
+  const reseed = () => save([
+    { id: 'p1', name: 'Plan A', baseUrl: 'https://gw.example.com', mode: 'plan' },
+    { id: 'p2', name: 'Bal B', baseUrl: 'https://gw.example.com', mode: 'balance' },
+  ]);
+  await t('401 → 明确指出 Key 有问题，而不是"找不到字段"', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/', status: 401, body: {} }]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /API Key 无效或权限不足（HTTP 401）/);
+    assert.ok(!/找不到 5h/.test(r.error), 'should not blame field names: ' + r.error);
+  });
+  await t('403 → 同样归类为鉴权问题', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/', status: 403, body: {} }]);
+    assert.match((await fetchUsage('p1')).error, /HTTP 403/);
+  });
+  await t('200+{success:false,message} → 转述服务商自己的话', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/', status: 200, body: { success: false, message: '无权进行此操作' } }]);
+    assert.match((await fetchUsage('p1')).error, /无权进行此操作/);
+  });
+  await t('全部 404 → 指向 Base URL 配置', async () => {
+    await reseed();
+    setRoutes([{ match: '/api/', status: 404, body: {} }]);
+    assert.match((await fetchUsage('p1')).error, /404|Base URL/);
+  });
+  await t('错误文案不回显 API Key', async () => {
+    await reseed();
+    // gateway echoes the key back in its message
+    setRoutes([{ match: '/api/', status: 200, body: { success: false, message: 'key sk-plan is not allowed' } }]);
+    const r = await fetchUsage('p1');
+    assert.ok(!r.error.includes('sk-plan'), 'key leaked into the UI message: ' + r.error);
+    assert.match(r.error, /\*\*\*/);
+  });
+
+  console.log('--- 行为验证（取代只匹配源码的文本断言）---');
+  await t('P2-3 读取侧：磁盘上被改成 file:// 也要拦住', async () => {
+    // Simulates a hand-edited / migrated providers.json — the write-side check
+    // never ran for this file.
+    await seedStore([
+      {
+        id: 'evil',
+        name: 'Evil',
+        baseUrl: 'file:///C:/Windows/win.ini',
+        mode: 'plan',
+        apiKeyEnc: { v: 1, alg: 'plain', data: Buffer.from('k', 'utf8').toString('base64') },
+      },
+    ]);
+    setRoutes([{ match: '/api/', status: 200, body: { data: { five_hour: { used: 1, total: 4 } } } }]);
+    const r = await fetchUsage('evil');
+    assert.strictEqual(r.ok, false, JSON.stringify(r));
+    assert.match(r.error, /协议不支持|格式不合法/);
+    assert.strictEqual(calls.length, 0, 'must not even attempt a request');
+  });
+  await t('P2-5 safeStorage 不可用时降级为 plain 并如实上报', async () => {
+    const warns = [];
+    const origWarn = console.warn;
+    console.warn = (...a) => warns.push(a.join(' '));
+    try {
+      encryptionAvailable = false;
+      await save([{ id: 'p1', name: 'Plan A', baseUrl: 'https://gw.example.com', mode: 'plan', apiKey: 'sk-plain' }]);
+      const status = await handlers['security:status'](null);
+      assert.strictEqual(status.encryptionAvailable, false);
+      const rec = readStore().providers.find((p) => p.id === 'p1');
+      assert.strictEqual(rec.apiKeyEnc.alg, 'plain', 'should fall back to plain');
+      assert.ok(warns.some((w) => /safeStorage unavailable/.test(w)), 'must warn: ' + JSON.stringify(warns));
+      // and the key still round-trips so polling still works
+      setRoutes([{ match: '/api/user/self', status: 200, body: { data: { five_hour: { used: 1, total: 4 } } } }]);
+      assert.strictEqual((await fetchUsage('p1')).ok, true);
+    } finally {
+      console.warn = origWarn;
+      encryptionAvailable = true;
+    }
+  });
+  await t('P1-1 编辑时不重输 key 会保留旧 key；传空串则删除', async () => {
+    encryptionAvailable = true;
+    await save([{ id: 'p1', name: 'Plan A', baseUrl: 'https://gw.example.com', mode: 'plan', apiKey: 'sk-orig' }]);
+    // edit: only the name changes, apiKey omitted (undefined = keep)
+    await save([{ id: 'p1', name: 'Renamed', baseUrl: 'https://gw.example.com', mode: 'plan' }]);
+    setRoutes([{ match: '/api/user/self', status: 200, body: { data: { five_hour: { used: 1, total: 4 } } } }]);
+    calls.length = 0;
+    assert.strictEqual((await fetchUsage('p1')).ok, true);
+    assert.ok(calls.some((c) => String(c.headers.Authorization) === 'Bearer sk-orig'), 'old key must be kept');
+    // explicit empty string deletes the key
+    await save([{ id: 'p1', name: 'Renamed', baseUrl: 'https://gw.example.com', mode: 'plan', apiKey: '' }]);
+    assert.strictEqual(readStore().providers.find((p) => p.id === 'p1').apiKeyEnc, null);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /尚未填写 API Key/);
   });
 
   console.log('\nipc.test: ' + pass + ' passed, ' + failures.length + ' failed');

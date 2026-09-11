@@ -26,7 +26,7 @@ npm install
 npm start
 ```
 
-首次启动会出现在屏幕右下角，拖标题栏可移动，点 ⚙ 添加订阅。
+首次启动会出现在屏幕右下角，并先显示一次**隐私说明**（点「知道了」后不再出现，确认状态存在本机）；拖标题栏可移动，点 ⚙ 添加订阅。
 
 标题栏按钮：`_` 最小化、`⚙` 设置、`↻` 刷新、`×` 隐藏。窗口是无边框且不占任务栏的，所以**首次最小化/隐藏时会自动在系统托盘生成一个绿色圆点图标**——左键点击或右键菜单「显示看板」即可恢复，右键「退出」退出程序。
 
@@ -36,13 +36,23 @@ npm start
 npm run dist:win
 ```
 
-产物在 `dist/`：一个 NSIS 安装包，双击安装。
+产物在 `dist/`：`LLM Usage Limit Board-<version>-Setup.exe`，双击安装（NSIS，可选安装目录、建桌面/开始菜单快捷方式）。
+
+> **国内网络注意**：electron-builder 默认从 GitHub releases 取 NSIS / winCodeSign / Electron 包，`github.com` 不通时**不会报错，而是卡住不动**（表现为 `dist/win-unpacked` 建了个空目录后长时间无输出）。`npm run dist:win` 已经默认把镜像指到 npmmirror，想覆盖就自己设 `ELECTRON_MIRROR` / `ELECTRON_BUILDER_BINARIES_MIRROR`。
+
+图标是代码生成的，不是二进制素材：
+
+```bash
+npm run icon     # 重新生成 build/icon.ico（7 种尺寸）+ src/assets/
+```
 
 ## 测试
 
 ```bash
 npm test          # 无需窗口：报告条目回归 + 纯函数 + IPC 端到端（各自打印实际条数）
-npm run test:dom  # 真实 Electron：渲染断言 + 托盘图标解码 + 截图（短暂创建隐藏窗口）
+npm run test:dom  # 真实 Electron：渲染断言 + 首次启动提示 + 托盘图标解码 + 截图
+npm run test:tray # 真实 Electron + 真实 Tray：点托盘把窗口调回来
+npm run test:all  # 上面三个依次跑
 ```
 
 > 具体条数不写在这里——每轮都会变，写死了就等着漂。以命令输出为准。

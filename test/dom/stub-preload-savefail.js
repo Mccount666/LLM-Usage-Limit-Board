@@ -14,5 +14,4 @@ contextBridge.exposeInMainWorld('api', {
   getFetchCount: async () => 0,
   minimizeWindow: async () => {},
   hideWindow: async () => {},
-  showWindow: async () => {},
 });

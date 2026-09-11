@@ -3,6 +3,7 @@
 
 const POLL_INTERVAL_MS = 60_000;
 const THRESHOLDS_LS_KEY = 'llm-board.balanceThresholds';
+const PRIVACY_ACK_KEY = 'llm-board.privacyAck';
 
 const DEFAULT_THRESHOLDS = { warn: 50, danger: 10 };
 
@@ -56,6 +57,9 @@ const els = {
   saveError: document.getElementById('saveError'),
   loadError: document.getElementById('loadError'),
   httpWarning: document.getElementById('httpWarning'),
+  // first-run notice
+  privacyNotice: document.getElementById('privacyNotice'),
+  privacyAck: document.getElementById('privacyAck'),
   // thresholds
   thresholdWarn: document.getElementById('thresholdWarn'),
   thresholdDanger: document.getElementById('thresholdDanger'),
@@ -76,6 +80,7 @@ const els = {
   renderSecurityBanner();
   renderHttpWarning();
   renderLoadError(loadError);
+  renderPrivacyNotice();
   renderAll();
   // Register the interval BEFORE the first fetch: pollOne()/applyUsageRow() can
   // reject in ways we have not anticipated, and a rejected pollAll() used to
@@ -102,6 +107,30 @@ function renderSecurityBanner() {
   banner.textContent = '⚠️ 本机系统级加密不可用，API Key 将以明文(base64)存储。建议在 Windows 上使用以获得 DPAPI 保护。';
   // Insert at the top of the settings panel.
   els.settingsPanel.insertBefore(banner, els.settingsPanel.firstChild);
+}
+
+/**
+ * First-run privacy notice. The promise ("keys stay on this machine") is the
+ * product's core claim, so it is shown once on first launch instead of being
+ * buried in the settings panel. Dismissal is remembered locally.
+ */
+function renderPrivacyNotice() {
+  let acked = false;
+  try {
+    acked = localStorage.getItem(PRIVACY_ACK_KEY) === '1';
+  } catch {
+    acked = false; // storage unavailable -> show it; nothing to remember anyway
+  }
+  if (!acked) els.privacyNotice.classList.remove('hidden');
+}
+
+function dismissPrivacyNotice() {
+  els.privacyNotice.classList.add('hidden');
+  try {
+    localStorage.setItem(PRIVACY_ACK_KEY, '1');
+  } catch {
+    // Not fatal: the notice reappears next launch, which is the safe direction.
+  }
 }
 
 function renderHttpWarning() {
@@ -137,6 +166,7 @@ function bindUi() {
 
   els.providerForm.addEventListener('submit', onSaveProvider);
   els.cancelEdit.addEventListener('click', resetForm);
+  els.privacyAck.addEventListener('click', dismissPrivacyNotice);
 
   // Threshold inputs — init from state, persist on change.
   els.thresholdWarn.value = state.thresholds.warn;

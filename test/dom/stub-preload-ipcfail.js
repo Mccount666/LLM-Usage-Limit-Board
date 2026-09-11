@@ -22,5 +22,4 @@ contextBridge.exposeInMainWorld('api', {
   hideWindow: async () => {
     throw new Error('window:hide failed');
   },
-  showWindow: async () => {},
 });

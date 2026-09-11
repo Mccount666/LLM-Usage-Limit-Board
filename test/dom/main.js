@@ -22,6 +22,8 @@ app.on('quit', () => {
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
 let pass = 0;
 const failures = [];
 function ck(label, cond, detail) {
@@ -189,6 +191,47 @@ app.whenReady().then(async () => {
     ck('删除失败后行回滚（UI 不显示未落盘的删除）', JSON.stringify(res.rowsAfter) === JSON.stringify(res.rowsBefore), JSON.stringify(res.rowsAfter));
     ck('删除失败有可见提示', res.errorHidden === false && /删除失败/.test(res.errorText), JSON.stringify(res.errorText));
     ck('窗口按钮 reject 不产生未处理 rejection', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
+  } else if (testCase === 'firstrun') {
+    // Privacy notice: shown on first launch, remembered after dismissal.
+    const before = JSON.parse(
+      await win.webContents.executeJavaScript(`(() => {
+        const el = document.getElementById('privacyNotice');
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({
+          hidden: el.classList.contains('hidden'),
+          displayed: getComputedStyle(el).display !== 'none',
+          coversBoard: r.height > window.innerHeight * 0.5,
+          text: el.textContent.replace(/\\s+/g, ' ').trim().slice(0, 200),
+          ackVisible: Boolean(document.getElementById('privacyAck')),
+          headerUsable: getComputedStyle(document.querySelector('.widget-header')).webkitAppRegion === 'drag',
+        });
+      })()`),
+    );
+    console.log('DOM ' + JSON.stringify(before));
+    ck('首次启动显示隐私提示', before.hidden === false && before.displayed === true, 'hidden=' + before.hidden);
+    ck('提示覆盖看板区域（不是藏在设置里）', before.coversBoard === true, 'coversBoard=' + before.coversBoard);
+    ck('文案包含"只保存在这台电脑上"与"唯一的外发请求"', /只保存在这台电脑上/.test(before.text) && /唯一的外发请求/.test(before.text), JSON.stringify(before.text.slice(0, 80)));
+    ck('有确认按钮', before.ackVisible === true);
+    ck('标题栏仍可拖动（没被提示挡住）', before.headerUsable === true);
+
+    // dismiss, then reload: it must stay dismissed
+    await win.webContents.executeJavaScript(`document.getElementById('privacyAck').click()`);
+    await wait(200);
+    const afterClick = await win.webContents.executeJavaScript(
+      `document.getElementById('privacyNotice').classList.contains('hidden')`,
+    );
+    ck('点「知道了」后立即隐藏', afterClick === true);
+
+    await win.webContents.reload();
+    await wait(1500);
+    const afterReload = JSON.parse(
+      await win.webContents.executeJavaScript(`(() => JSON.stringify({
+        hidden: document.getElementById('privacyNotice').classList.contains('hidden'),
+        stored: (() => { try { return localStorage.getItem('llm-board.privacyAck'); } catch { return null; } })(),
+      }))()`),
+    );
+    ck('重载后不再出现（已记住）', afterReload.hidden === true, 'hidden=' + afterReload.hidden);
+    ck('localStorage 里留下了确认标记', afterReload.stored === '1', String(afterReload.stored));
   } else if (testCase === 'visual') {
     // The tray icon is a hand-generated inline PNG — make sure Electron can
     // actually decode it (an empty image makes Tray silent/invisible).
@@ -208,7 +251,17 @@ app.whenReady().then(async () => {
     fs.writeFileSync(shot, image.toPNG());
     ck('成功截取渲染结果', image.getSize().width > 0 && image.getSize().height > 0, JSON.stringify(image.getSize()));
     ck('截图非空白（PNG > 3KB）', image.toPNG().length > 3000, image.toPNG().length + ' bytes');
-    console.log('screenshot: ' + shot);
+    console.log('screenshot (first run): ' + shot);
+
+    // …and a second one with the first-run notice dismissed, so the normal
+    // board layout also has a visual artifact to review.
+    await win.webContents.executeJavaScript(`document.getElementById('privacyAck').click()`);
+    await wait(400);
+    const shot2 = path.join(os.tmpdir(), 'llmb-widget-shot-acked.png');
+    const image2 = await win.webContents.capturePage();
+    fs.writeFileSync(shot2, image2.toPNG());
+    ck('关闭提示后的截图非空白', image2.toPNG().length > 3000, image2.toPNG().length + ' bytes');
+    console.log('screenshot (board): ' + shot2);
   } else {
     // P2-B: loadProviders() rejecting must not blank the widget silently.
     const res = JSON.parse(

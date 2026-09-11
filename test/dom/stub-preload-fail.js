@@ -11,5 +11,4 @@ contextBridge.exposeInMainWorld('api', {
   fetchUsage: async () => ({ ok: false, error: 'n/a' }),
   minimizeWindow: async () => {},
   hideWindow: async () => {},
-  showWindow: async () => {},
 });

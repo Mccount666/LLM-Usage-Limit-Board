@@ -31,8 +31,7 @@
         </div>
       </header>
 
-      <section id="settingsPanel" class="settings hidden">
-        <h3>添加 / 编辑订阅</h3>
+      <section id="settingsPanel" class="settings hidden">        <h3>添加 / 编辑订阅</h3>
         <form id="providerForm">
           <input type="hidden" id="providerId" />
           <label>
@@ -102,6 +101,19 @@
         <span id="lastUpdated">—</span>
         <span class="poll-info">每 60s 自动刷新 · 本地存储</span>
       </footer>
+
+      <!-- First-run notice. The privacy promise is the product's core claim, so
+           it is stated on first launch rather than only buried in the settings
+           panel. Dismissal is remembered in localStorage. -->
+      <div id="privacyNotice" class="privacy-notice hidden">
+        <h4>本地存储 · 零上传</h4>
+        <ul>
+          <li>订阅信息和 API Key <b>只保存在这台电脑上</b>，用 Windows DPAPI 加密</li>
+          <li>程序不连接任何后端服务器；<b>唯一的外发请求</b>发往你自己填写的 Base URL</li>
+          <li>没有账号、没有云同步、没有统计上报</li>
+        </ul>
+        <button type="button" id="privacyAck" class="primary">知道了</button>
+      </div>
     </div>
 
     <script src="renderer.js"></script>

@@ -7,10 +7,13 @@
     "start": "electron .",
     "dev": "electron . --enable-logging",
     "test": "node test/report-items.test.js && node test/limits.test.js && node test/ipc.test.js",
-    "test:dom": "electron test/dom/main.js stub-preload.js injection && electron test/dom/main.js stub-preload.js behavior && electron test/dom/main.js stub-preload-fail.js loadfail && electron test/dom/main.js stub-preload-savefail.js savefail && electron test/dom/main.js stub-preload-ipcfail.js ipcfail && electron test/dom/main.js stub-preload.js visual",
+    "test:dom": "electron test/dom/main.js stub-preload.js injection && electron test/dom/main.js stub-preload.js behavior && electron test/dom/main.js stub-preload.js firstrun && electron test/dom/main.js stub-preload-fail.js loadfail && electron test/dom/main.js stub-preload-savefail.js savefail && electron test/dom/main.js stub-preload-ipcfail.js ipcfail && electron test/dom/main.js stub-preload.js visual",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
-    "dist:win": "electron-builder --win --x64"
+    "dist:win": "node tools/dist.js --win --x64",
+    "icon": "node tools/make-icon.js",
+    "test:tray": "electron test/tray.test.js",
+    "test:all": "npm test && npm run test:dom && npm run test:tray"
   },
   "author": "llm-usage-limit-board contributors",
   "license": "MIT",
@@ -40,7 +43,8 @@
           ]
         }
       ],
-      "artifactName": "${productName}-${version}-Setup.${ext}"
+      "artifactName": "${productName}-${version}-Setup.${ext}",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
