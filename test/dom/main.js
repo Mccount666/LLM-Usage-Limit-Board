@@ -1,0 +1,235 @@
+// DOM regression test. Real Electron loads the real renderer with a stub
+// preload, so the renderer's actual escaping / lookup / shape logic is exercised.
+//
+// Run: npm run test:dom
+// Usage: electron test/dom/main.js [preloadFile] [case]
+
+const { app, BrowserWindow, nativeImage } = require('electron');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const preloadFile = process.argv[2] || 'stub-preload.js';
+const testCase = process.argv[3] || 'injection';
+const root = path.join(__dirname, '..', '..');
+
+// Isolate persistent state (localStorage: balance thresholds) per run — the
+// `behavior` case changes the thresholds, and sharing a profile made later
+// cases assert against the mutated values.
+const dataDir = path.join(os.tmpdir(), 'llmb-dom-' + process.pid);
+app.setPath('userData', dataDir);
+app.on('quit', () => {
+  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* best effort */ }
+});
+
+let pass = 0;
+const failures = [];
+function ck(label, cond, detail) {
+  if (cond) {
+    pass++;
+    console.log('  ok   ' + label + (detail ? '  [' + detail + ']' : ''));
+  } else {
+    failures.push(label + (detail ? ' :: ' + detail : ''));
+    console.log('  FAIL ' + label + (detail ? '  [' + detail + ']' : ''));
+  }
+}
+
+app.whenReady().then(async () => {
+  const win = new BrowserWindow({
+    width: 520,
+    height: 620,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, preloadFile),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  const errors = [];
+  win.webContents.on('console-message', (_e, level, msg) => {
+    if (level >= 2) errors.push(msg);
+  });
+
+  await win.loadFile(path.join(root, 'src', 'renderer', 'index.html'));
+  await new Promise((r) => setTimeout(r, 1600));
+
+  if (testCase === 'injection') {
+    const res = JSON.parse(
+      await win.webContents.executeJavaScript(`(() => {
+        const rows = [...document.querySelectorAll('.usage-item')];
+        const rowOf = (id) => rows.find((r) => r.dataset.id === id);
+        const pcts = (r) => [...r.querySelectorAll('.bar-pct')].map((e) => e.textContent);
+        return JSON.stringify({
+          imgInProviderList: document.querySelectorAll('#providerList img').length,
+          imgInUsageList: document.querySelectorAll('#usageList img').length,
+          xssIdFlag: window.__xssId === undefined ? 'undefined' : 'EXECUTED',
+          lastUpdated: document.getElementById('lastUpdated').textContent,
+          rowIds: rows.map((r) => r.dataset.id),
+          injPcts: pcts(rows[0]),
+          p2Pcts: pcts(rowOf('p2')),
+          p3Errors: [...rowOf('p3').querySelectorAll('.usage-error')].map((e) => e.textContent),
+          modeTags: document.querySelectorAll('#providerList .mode-tag').length,
+          buttons: document.querySelectorAll('#providerList button').length,
+          httpWarningHidden: document.getElementById('httpWarning').classList.contains('hidden'),
+          // Bar fill must be proportional to the percentage (measured, not eyeballed)
+          barsByRow: rows.map((r) =>
+            [...r.querySelectorAll('.bar')].map((track) => {
+              const fill = track.querySelector('.bar-fill');
+              const tw = track.getBoundingClientRect().width;
+              if (!fill || !tw) return null;
+              return Math.round((fill.getBoundingClientRect().width / tw) * 1000) / 10;
+            }),
+          ),
+        });
+      })()`),
+    );
+
+    // P1-B: the id below used to inject an <img> AND throw a SyntaxError from
+    // querySelector, which killed the refresh chain (lastUpdated stayed "—").
+    ck('provider 列表无注入 <img>（修复前为 2）', res.imgInProviderList === 0, String(res.imgInProviderList));
+    ck('看板列表无注入 <img>', res.imgInUsageList === 0, String(res.imgInUsageList));
+    ck('注入脚本未执行', res.xssIdFlag === 'undefined', res.xssIdFlag);
+    ck('恶意 id 原样保留在 dataset 中', res.rowIds[0] === 'inj"><img src=x onerror="window.__xssId=1', JSON.stringify(res.rowIds[0]));
+    ck('自动刷新链路存活（修复前 lastUpdated 停在 "—"）', res.lastUpdated.startsWith('更新于'), JSON.stringify(res.lastUpdated));
+    ck('恶意 id 那行读数正常', res.injPcts.length === 2 && res.injPcts[0] === '42.5%', JSON.stringify(res.injPcts));
+    ck('P3-A 形状随数据（plan 收到 balance → 1 条 bar）', res.p2Pcts.length === 1 && res.p2Pcts[0] === 'CNY 30.00', JSON.stringify(res.p2Pcts));
+    ck('bar 宽度与百分比成正比（实测 5h 42.5 / 7d 88）', Math.abs(res.barsByRow[0][0] - 42.5) < 1 && Math.abs(res.barsByRow[0][1] - 88) < 1, JSON.stringify(res.barsByRow[0]));
+    ck('余额中段阈值公式（30 介于 10/50 → 50%）', Math.abs(res.barsByRow[1][0] - 50) < 1, JSON.stringify(res.barsByRow[1]));
+    ck('低用量行成正比（实测 10 / 20）', Math.abs(res.barsByRow[3][0] - 10) < 1 && Math.abs(res.barsByRow[3][1] - 20) < 1, JSON.stringify(res.barsByRow[3]));
+    ck('错误态行两条 bar 归零', res.barsByRow[2].every((v) => v === 0), JSON.stringify(res.barsByRow[2]));
+    ck('错误态写入行内', res.p3Errors.length === 1 && res.p3Errors[0] === 'boom', JSON.stringify(res.p3Errors));
+    ck('provider 列表渲染名称与模式标签', res.modeTags === 4, String(res.modeTags));
+    ck('编辑/删除按钮各 4 个', res.buttons === 8, String(res.buttons));
+    ck('P2-A HTTP:// 大写协议也触发明文告警', res.httpWarningHidden === false, 'hidden=' + res.httpWarningHidden);
+    ck('渲染进程无 console 错误', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
+  } else if (testCase === 'behavior') {
+    // Behavioural (not source-text) assertions for two items the reviewer asked
+    // to upgrade: polling re-entrancy and "threshold change must not re-request".
+    const res = JSON.parse(
+      await win.webContents.executeJavaScript(`(async () => {
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        const pcts = () => [...document.querySelectorAll('.bar-pct')].map((e) => e.textContent);
+        const out = { providerCount: document.querySelectorAll('.usage-item').length };
+
+        // 1) two overlapping polls must not double the requests
+        const before = await window.api.getFetchCount();
+        pollAll(); pollAll();
+        await wait(400);
+        out.requestsForTwoPolls = (await window.api.getFetchCount()) - before;
+
+        // 2) changing a threshold must redraw from cache without any request
+        const before2 = await window.api.getFetchCount();
+        const pctsBefore = pcts();
+        const warn = document.getElementById('thresholdWarn');
+        warn.value = '80';
+        warn.dispatchEvent(new Event('change'));
+        await wait(250);
+        out.requestsAfterThresholdChange = (await window.api.getFetchCount()) - before2;
+        out.pctsUnchanged = JSON.stringify(pctsBefore) === JSON.stringify(pcts());
+        out.widthsAfter = [...document.querySelectorAll('.bar-fill')].map((e) => e.style.width);
+        return JSON.stringify(out);
+      })()`),
+    );
+    console.log('DOM ' + JSON.stringify(res));
+    ck('两次重叠轮询只发一轮请求（4 个 provider → 4 次）', res.requestsForTwoPolls === res.providerCount, JSON.stringify(res.requestsForTwoPolls) + ' vs ' + res.providerCount);
+    ck('阈值变更不发任何请求', res.requestsAfterThresholdChange === 0, String(res.requestsAfterThresholdChange));
+    ck('阈值变更后读数由缓存重绘（未清空）', res.pctsUnchanged === true, JSON.stringify(res.pctsUnchanged));
+  } else if (testCase === 'savefail') {
+    // P1-C: saveProviders() rejecting must surface a visible error and must NOT
+    // render a row that only exists in memory.
+    const res = JSON.parse(
+      await win.webContents.executeJavaScript(`(async () => {
+        document.getElementById('providerName').value = 'Unsaveable';
+        document.getElementById('providerBaseUrl').value = 'https://x.example.com';
+        document.getElementById('providerApiKey').value = 'sk-1';
+        document.getElementById('providerForm').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+        await new Promise((r) => setTimeout(r, 300));
+        const el = document.getElementById('saveError');
+        return JSON.stringify({
+          hidden: el.classList.contains('hidden'),
+          text: el.textContent,
+          rowsShown: document.querySelectorAll('#usageList .usage-item').length,
+          formStillFilled: document.getElementById('providerName').value,
+        });
+      })()`),
+    );
+    console.log('DOM ' + JSON.stringify(res));
+    ck('保存失败横幅可见', res.hidden === false, 'hidden=' + res.hidden);
+    ck('横幅含 IPC rejection 原因', /保存失败/.test(res.text) && /read-only/.test(res.text), JSON.stringify(res.text));
+    ck('未渲染"假保存成功"的行', res.rowsShown === 0, String(res.rowsShown));
+    ck('表单内容保留（用户不用重输）', res.formStillFilled === 'Unsaveable', res.formStillFilled);
+    ck('渲染进程无 console 错误（无未处理 rejection）', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
+  } else if (testCase === 'ipcfail') {
+    // P1-C for the other three call sites: a rejected deleteProvider must roll
+    // back the row (not show a deletion that never happened), and rejected
+    // window controls must not become unhandled rejections.
+    const res = JSON.parse(
+      await win.webContents.executeJavaScript(`(async () => {
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        const rowsBefore = [...document.querySelectorAll('.usage-item')].map((r) => r.dataset.id);
+        // provider list: [edit, del] per row → index 1 is the first row's delete
+        document.querySelectorAll('#providerList button')[1].click();
+        await wait(300);
+        const rowsAfter = [...document.querySelectorAll('.usage-item')].map((r) => r.dataset.id);
+        const el = document.getElementById('saveError');
+        document.getElementById('minimizeBtn').click();
+        document.getElementById('hideBtn').click();
+        await wait(200);
+        return JSON.stringify({
+          rowsBefore,
+          rowsAfter,
+          errorHidden: el.classList.contains('hidden'),
+          errorText: el.textContent,
+        });
+      })()`),
+    );
+    console.log('DOM ' + JSON.stringify(res));
+    ck('删除失败后行回滚（UI 不显示未落盘的删除）', JSON.stringify(res.rowsAfter) === JSON.stringify(res.rowsBefore), JSON.stringify(res.rowsAfter));
+    ck('删除失败有可见提示', res.errorHidden === false && /删除失败/.test(res.errorText), JSON.stringify(res.errorText));
+    ck('窗口按钮 reject 不产生未处理 rejection', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
+  } else if (testCase === 'visual') {
+    // The tray icon is a hand-generated inline PNG — make sure Electron can
+    // actually decode it (an empty image makes Tray silent/invisible).
+    const mainSrc = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const b64 = (mainSrc.match(/'data:image\/png;base64,([A-Za-z0-9+/=]+)'/) || [])[1];
+    ck('main.js 里能找到内联托盘图标 data URL', Boolean(b64), b64 ? b64.slice(0, 24) + '…' : 'not found');
+    const icon = nativeImage.createFromDataURL('data:image/png;base64,' + b64);
+    ck('托盘图标可被 nativeImage 解码（非空）', !icon.isEmpty(), 'empty=' + icon.isEmpty());
+    const size = icon.getSize();
+    ck('托盘图标尺寸 16x16', size.width === 16 && size.height === 16, size.width + 'x' + size.height);
+    const png = icon.toPNG();
+    ck('托盘图标 PNG 字节数合理', png.length > 80 && png.length < 2000, png.length + ' bytes');
+
+    // Capture the rendered widget so a human can eyeball the panel/layout.
+    const shot = path.join(os.tmpdir(), 'llmb-widget-shot.png');
+    const image = await win.webContents.capturePage();
+    fs.writeFileSync(shot, image.toPNG());
+    ck('成功截取渲染结果', image.getSize().width > 0 && image.getSize().height > 0, JSON.stringify(image.getSize()));
+    ck('截图非空白（PNG > 3KB）', image.toPNG().length > 3000, image.toPNG().length + ' bytes');
+    console.log('screenshot: ' + shot);
+  } else {
+    // P2-B: loadProviders() rejecting must not blank the widget silently.
+    const res = JSON.parse(
+      await win.webContents.executeJavaScript(`(() => {
+        const el = document.getElementById('loadError');
+        return JSON.stringify({
+          exists: !!el,
+          hidden: el ? el.classList.contains('hidden') : null,
+          text: el ? el.textContent : '',
+          boardRendered: !document.getElementById('emptyState').classList.contains('hidden'),
+        });
+      })()`),
+    );
+    ck('loadError 横幅存在', res.exists === true);
+    ck('loadError 可见（非 hidden）', res.hidden === false, String(res.hidden));
+    ck('提示含失败原因', /读取本地订阅失败/.test(res.text) && /IPC channel closed/.test(res.text), JSON.stringify(res.text));
+    ck('init 未中断，renderAll 仍执行', res.boardRendered === true);
+    ck('渲染进程无 console 错误', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
+  }
+
+  console.log('dom.test(' + testCase + '): ' + pass + ' passed, ' + failures.length + ' failed');
+  if (failures.length) console.log('Failed:\n- ' + failures.join('\n- '));
+  app.exit(failures.length ? 1 : 0);
+});

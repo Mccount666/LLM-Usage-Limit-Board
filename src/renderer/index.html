@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Defence in depth for the escaped-but-still-built-with-innerHTML rows:
+         no remote script/style/img, and no network egress from the renderer
+         (all requests go through the main process).
+         style-src needs 'unsafe-inline' because setBar() writes bar widths via
+         `el.style.width`, which Chromium reports as an inline-style violation
+         even though CSSOM is outside CSP's scope. Script execution stays locked
+         to 'self' and no inline <script> exists. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'"
+    />
+    <title>LLM Usage Limit Board</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="widget" class="widget">
+      <header class="widget-header" id="dragHandle">
+        <div class="title">
+          <span class="dot"></span>
+          <span>LLM 用量看板</span>
+        </div>
+        <div class="actions">
+          <button class="icon-btn" id="minimizeBtn" title="最小化">_</button>
+          <button class="icon-btn" id="toggleSettings" title="设置">⚙</button>
+          <button class="icon-btn" id="refreshBtn" title="刷新">↻</button>
+          <button class="icon-btn" id="hideBtn" title="隐藏">×</button>
+        </div>
+      </header>
+
+      <section id="settingsPanel" class="settings hidden">
+        <h3>添加 / 编辑订阅</h3>
+        <form id="providerForm">
+          <input type="hidden" id="providerId" />
+          <label>
+            显示名称
+            <input type="text" id="providerName" placeholder="例如：My OneAPI" required />
+          </label>
+          <label>
+            模式
+            <select id="providerMode">
+              <option value="plan">Coding Plan（5h + 周限额）</option>
+              <option value="balance">中转站 / 按量（账户余额）</option>
+            </select>
+          </label>
+          <label>
+            Base URL
+            <input type="text" id="providerBaseUrl" placeholder="https://api.example.com" required />
+          </label>
+          <label>
+            API Key
+            <input type="password" id="providerApiKey" placeholder="sk-... （编辑时留空表示不修改）" />
+          </label>
+          <div class="form-row">
+            <button type="submit" class="primary">保存</button>
+            <button type="button" id="cancelEdit">取消</button>
+          </div>
+        </form>
+        <ul id="providerList" class="provider-list"></ul>
+
+        <div id="saveError" class="save-error hidden"></div>
+
+        <div class="threshold-config">
+          <div class="threshold-title">余额告警阈值</div>
+          <div class="threshold-row">
+            <label>
+              黄色阈值
+              <input type="number" id="thresholdWarn" min="0" step="1" />
+            </label>
+            <label>
+              红色阈值
+              <input type="number" id="thresholdDanger" min="0" step="1" />
+            </label>
+          </div>
+          <div class="threshold-hint">
+            低于红色阈值变红，介于红/黄之间变黄，高于黄色阈值显示绿色（默认 10 / 50）
+          </div>
+        </div>
+
+        <div id="httpWarning" class="http-warning hidden">
+          ⚠️ 检测到使用 HTTP（非加密）协议的 Base URL，API Key 将以明文传输。建议改用 HTTPS。
+        </div>
+
+        <p class="hint">
+          🔒 所有订阅和 API Key 仅保存在本机，使用 Windows DPAPI 加密，
+          程序只向用户填写的 Base URL 发起用量查询请求，不会上传到任何第三方服务器。
+        </p>
+      </section>
+
+      <section id="board" class="board">
+        <div id="loadError" class="save-error hidden"></div>
+        <ul id="usageList" class="usage-list"></ul>
+        <div id="emptyState" class="empty-state">
+          还没有订阅。点击右上角 ⚙ 添加一个吧。
+        </div>
+      </section>
+
+      <footer class="widget-footer">
+        <span id="lastUpdated">—</span>
+        <span class="poll-info">每 60s 自动刷新 · 本地存储</span>
+      </footer>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>

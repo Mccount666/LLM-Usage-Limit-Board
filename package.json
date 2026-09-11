@@ -1,0 +1,55 @@
+{
+  "name": "llm-usage-limit-board",
+  "version": "0.1.0",
+  "description": "A privacy-first desktop widget that shows real-time LLM usage limits (5h & weekly) per subscription. All data stays local.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "test": "node test/report-items.test.js && node test/limits.test.js && node test/ipc.test.js",
+    "test:dom": "electron test/dom/main.js stub-preload.js injection && electron test/dom/main.js stub-preload.js behavior && electron test/dom/main.js stub-preload-fail.js loadfail && electron test/dom/main.js stub-preload-savefail.js savefail && electron test/dom/main.js stub-preload-ipcfail.js ipcfail && electron test/dom/main.js stub-preload.js visual",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win --x64"
+  },
+  "author": "llm-usage-limit-board contributors",
+  "license": "MIT",
+  "private": true,
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.llmusage.limitboard",
+    "productName": "LLM Usage Limit Board",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LLM Usage Limit Board"
+    },
+    "asar": true
+  }
+}

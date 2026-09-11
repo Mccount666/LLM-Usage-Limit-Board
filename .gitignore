@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# agent/tool state (not project source)
+.v2c/
+.workbuddy/
