@@ -19,7 +19,7 @@
 | **DeepSeek** | 余额 | `https://api.deepseek.com`（填 `https://api.deepseek.com/v1` 也可以） | DeepSeek 开放平台 Key | 取 CNY 账户总余额 |
 | **Moonshot 开放平台** | 余额 | `https://api.moonshot.cn/v1` | 开放平台 Key（platform.moonshot.cn / .ai） | 按量计费显示账户余额，无 5h/周窗口 |
 | **StepFun** | 余额 | `https://api.stepfun.com` | 阶跃星辰开放平台 Key | Step Plan 订阅额度官方暂无查询接口（余额≠订阅额度） |
-| **CherryIN** | 余额 | `https://open.cherryin.ai` | `sk-` 令牌；若报鉴权/402 错，改填控制台「设置 → 生成访问令牌」的令牌（两种自动级联尝试） | New API 栈；sk- 走账单对、访问令牌走用户端点（quota 换算 USD） |
+| **CherryIN** | 余额 | `https://open.cherryin.ai` | `sk-` 令牌或控制台访问令牌；新版站点报 401/402 时用「访问令牌|用户ID」格式（用户 ID 见控制台个人设置） | New API 栈；sk- 走账单对、访问令牌走用户端点 + OAuth 余额端点（quota 换算 USD；无限额度哨兵大数已过滤） |
 | **GitHub Copilot** | Coding Plan | `https://api.github.com` | GitHub **OAuth token**（`gho_…`，如 `gh auth token`；PAT 不受支持） | 第二列 = Premium 请求月度用量（标签「月」） |
 | **火山方舟 Coding Plan** | — | — | — | 暂无公开 Key 直查接口（用量走控制台；通用 API 需 AK/SK 签名） |
 | OneAPI / NewAPI 网关 | 余额 | 中转站根地址 | 网关 Key | 按网关返回的字段自动识别 |

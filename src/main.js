@@ -775,8 +775,15 @@ async function fetchCherryInBalance(provider) {
   // ② 失败则降级控制台「访问令牌」体系 → /api/user/* 族（New API 用户端点，
   //    官方对计费路由逐步加了用户校验，sk- 可能被 402/401 拒——访问令牌可达）。
   //    访问令牌两种拼法都试：`Bearer <token>` 与裸 token（one-api 兼容）。
+  // Key 框可选双要素格式「令牌|用户ID」：提供用户 ID 时附带 New-Api-User 头
+  // （新版 New API 的用户族/计费路由要求它，缺失即 401/402 "无效的令牌"）。
+  // 不带「|」时行为与从前完全一致。
+  const [credRaw, uidRaw] = String(provider.apiKey || '').split('|');
+  const key = (credRaw || '').trim();
+  const uid = (uidRaw || '').trim();
   const diag = newProbeDiag();
-  const headers = { Authorization: `Bearer ${provider.apiKey}` };
+  const headers = { Authorization: `Bearer ${key}` };
+  if (uid) headers['New-Api-User'] = uid;
   const sub = await probeCandidates(provider, 'cherryin-sub', [CHERRYIN_SUB_PATH], headers, (r) => {
     // 无限额度令牌的 hard_limit_usd 是 9999999999.99 级哨兵——不得当真。
     const limit = numOf(r.data?.hard_limit_usd ?? r.data?.system_hard_limit_usd);
@@ -807,8 +814,8 @@ async function fetchCherryInBalance(provider) {
   // parseCherryInUserBalance 的常识阈值拒掉后自然落到下一候选）。
   const userPaths = ['/api/v1/oauth/balance', '/api/user/self', '/api/user/balance', '/api/user/quota'];
   const authVariants = [
-    { Authorization: `Bearer ${provider.apiKey}` },
-    { Authorization: String(provider.apiKey || '') },
+    { Authorization: `Bearer ${key}` },
+    { Authorization: key },
   ];
   let parsed = null;
   for (const hv of authVariants) {
@@ -827,7 +834,7 @@ async function fetchCherryInBalance(provider) {
   // 两段都失败：优先转述第一段服务商的原话（用户看到的就是 CherryIN 的措辞），
   // 并给出「访问令牌」这条已验证存在的替代路径。
   const msg = explainProbeFailure(diag, provider, 'balance');
-  const hint = '。CherryIN 的 sk- 模型令牌不被余额端点接受（401 Invalid token 实测即此因）：请改填控制台「设置 → 生成访问令牌」的令牌（两种都会自动尝试，Cherry Studio 同款余额端点已并入候选）；仍失败请把 /v1/dashboard/billing/subscription 与 /api/user/self 的返回 JSON 发给我适配';
+  const hint = '。CherryIN 的 sk- 模型令牌不被余额端点接受（401 Invalid token 实测即此因）：请改填控制台「设置 → 生成访问令牌」的令牌，并按「令牌|用户ID」格式填写（用户 ID 见控制台个人设置；新版站点校验 New-Api-User 头，两种令牌都会自动尝试，Cherry Studio 同款余额端点已并入候选）；仍失败请把 /v1/dashboard/billing/subscription 与 /api/user/self 的返回 JSON 发给我适配';
   return { ok: false, error: msg + hint };
 }
 

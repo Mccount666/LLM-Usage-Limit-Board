@@ -487,6 +487,28 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.match(r.error, /用量查询失败/);
   });
 
+  await t('双要素「令牌|用户ID」：两级请求都带 New-Api-User 头', async () => {
+    await save([{ id: 'ci6b', name: 'CherryIN-uid', baseUrl: 'https://open.cherryin.ai', mode: 'balance', apiKey: 'the-access-token|42' }]);
+    setRoutes([
+      { match: '/v1/dashboard/billing/subscription', status: 200, body: { hard_limit_usd: 30 } },
+      { match: '/v1/dashboard/billing/usage', status: 200, body: { total_usage: 100 } },
+    ]);
+    const r = await fetchUsage('ci6b');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.amount - (30 - 1)) < 1e-9, 'amount=' + r.usage.amount);
+    for (const c of calls) {
+      assert.strictEqual(c.headers['New-Api-User'], '42', 'New-Api-User header missing on ' + c.url);
+      assert.strictEqual(c.headers.Authorization, 'Bearer the-access-token', 'cred part must not include the pipe suffix');
+    }
+  });
+  await t('不带「|用户ID」时不发 New-Api-User 头（行为不变）', async () => {
+    await save([{ id: 'ci7', name: 'CherryIN-nouid', baseUrl: 'https://open.cherryin.ai', mode: 'balance', apiKey: 'sk-plain' }]);
+    setRoutes([{ match: '/v1/dashboard/billing/subscription', status: 200, body: { hard_limit_usd: 30 } }, { match: '/v1/dashboard/billing/usage', status: 200, body: { total_usage: 0 } }]);
+    const r = await fetchUsage('ci7');
+    assert.strictEqual(r.ok, true);
+    for (const c of calls) assert.ok(!('New-Api-User' in c.headers), 'unexpected New-Api-User header');
+  });
+
   console.log('--- usage:fetch / GitHub Copilot（两步换票）---');
   await t('PAT 直接诚实拒绝，零请求', async () => {
     await save([{ id: 'cp0', name: 'Copilot PAT', baseUrl: 'https://api.github.com', mode: 'plan', apiKey: 'ghp_test' }]);
