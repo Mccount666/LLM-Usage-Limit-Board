@@ -301,14 +301,26 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
   console.log('--- usage:fetch / DeepSeek 余额（host deepseek.com）---');
   await t('/user/balance 命中：取 CNY 行 total_balance', async () => {
     await save([{ id: 'ds1', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', mode: 'balance', apiKey: 'sk-ds-test' }]);
-    setRoutes([{ match: '/user/balance', status: 200, body: { is_available: true, balance: [
+    setRoutes([{ match: '/user/balance', status: 200, body: { is_available: true, balance_infos: [
       { currency: 'USD', total_balance: '0.10' },
-      { currency: 'CNY', total_balance: '110.50' },
+      { currency: 'CNY', total_balance: '110.50', granted_balance: '10.00', topped_up_balance: '100.50' },
     ] } }]);
     const r = await fetchUsage('ds1');
     assert.strictEqual(r.ok, true);
     assert.ok(Math.abs(r.usage.amount - 110.5) < 1e-9, 'amount=' + r.usage.amount);
     assert.strictEqual(r.usage.currency, 'CNY');
+    const hit = calls.find((c) => c.url === 'https://api.deepseek.com/user/balance');
+    assert.ok(hit, 'canonical path not requested');
+  });
+  await t('Base URL 带 /v1 时归一化到规范端点（不带 /v1 直拼）', async () => {
+    await save([{ id: 'ds3', name: 'DeepSeek3', baseUrl: 'https://api.deepseek.com/v1', mode: 'balance', apiKey: 'sk-ds-test' }]);
+    setRoutes([{ match: '/user/balance', status: 200, body: { is_available: true, balance_infos: [
+      { currency: 'CNY', total_balance: '66.00' },
+    ] } }]);
+    const r = await fetchUsage('ds3');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.amount - 66) < 1e-9, 'amount=' + r.usage.amount);
+    assert.ok(calls.some((c) => c.url === 'https://api.deepseek.com/user/balance'), 'normalized base must hit the canonical endpoint');
   });
   await t('Base URL 带 /v1 时同样命中（双路径变体并发探测）', async () => {
     await save([{ id: 'ds2', name: 'DeepSeek2', baseUrl: 'https://api.deepseek.com/v1', mode: 'balance', apiKey: 'sk-ds-test' }]);

@@ -617,11 +617,18 @@ async function fetchOpenRouterBalance(provider) {
 // DeepSeek 按量余额：{base}/user/balance（base = https://api.deepseek.com）。
 // 官方文档同时教用户填 /v1（OpenAI 兼容形）——两个路径变体都实测存活
 // （哑密钥均 401），并发探测先到先用，填哪种都能命中。
-// → { balance: [{ currency, total_balance, … }] }。取 CNY 行的 total_balance。
+// 响应官方键为 balance_infos 数组（api-docs.deepseek.com 查询余额），解析见
+// parseDeepSeekBalance（balance 别名与顶层 total_balance 兼容）。
+// base 以 /v1 结尾的填法先归一化去掉（同 host，仅去文档惯用的 /v1 前缀），
+// 两种填法都落到同一规范端点。
 const DEEPSEEK_BALANCE_PATHS = ['/user/balance', '/v1/user/balance'];
-async function fetchDeepSeekBalance(provider) {
+async function fetchDeepSeekBalance(providerIn) {
   const diag = newProbeDiag();
-  const headers = { Authorization: `Bearer ${provider.apiKey}` };
+  const headers = { Authorization: `Bearer ${providerIn.apiKey}` };
+  const rawBase = providerIn.baseUrl.replace(/\/+$/, '');
+  const normBase = rawBase.endsWith('/v1') ? rawBase.slice(0, -3) : rawBase;
+  // 就地换名，保证九个 probeCandidates 调用点形参同形（P3-C 不变量）。
+  const provider = normBase === rawBase ? providerIn : { ...providerIn, baseUrl: normBase };
   let parsed = null;
   const res = await probeCandidates(provider, 'deepseek-balance', DEEPSEEK_BALANCE_PATHS, headers, (r) => {
     parsed = parseDeepSeekBalance(r.data);
@@ -630,7 +637,7 @@ async function fetchDeepSeekBalance(provider) {
   if (!res) {
     const msg = explainProbeFailure(diag, provider, 'balance');
     const hint = /404|没有提供可用的用量接口/.test(msg)
-      ? '。DeepSeek 的 Base URL 填 https://api.deepseek.com' : '';
+      ? '。DeepSeek 的 Base URL 填 https://api.deepseek.com（或带 /v1）' : '';
     return { ok: false, error: msg + hint };
   }
   return { ok: true, usage: { mode: 'balance', amount: parsed.amount, currency: parsed.currency, field: 'balance' } };

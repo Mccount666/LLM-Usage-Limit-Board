@@ -251,6 +251,18 @@ t('DeepSeek：优先 CNY 行，取 total_balance', () => {
   assert.ok(Math.abs(r.amount - 110.5) < 1e-9);
   assert.strictEqual(r.currency, 'CNY');
 });
+t('DeepSeek 官方形状：balance_infos 键（api-docs 实键名）优先识别', () => {
+  const r = parseDeepSeekBalance({ is_available: true, balance_infos: [
+    { currency: 'CNY', total_balance: '110.00', granted_balance: '10.00', topped_up_balance: '100.00' },
+  ] });
+  assert.ok(Math.abs(r.amount - 110.0) < 1e-9);
+  assert.strictEqual(r.currency, 'CNY');
+});
+t('DeepSeek：顶层 total_balance 兜底（部分文档版本）', () => {
+  const r = parseDeepSeekBalance({ is_available: true, total_balance: '77.5' });
+  assert.ok(Math.abs(r.amount - 77.5) < 1e-9);
+  assert.strictEqual(r.currency, '');
+});
 t('DeepSeek：无 CNY 行回落首行；空数组/坏形状 → null', () => {
   assert.strictEqual(parseDeepSeekBalance({ balance: [{ currency: 'USD', total_balance: '3.2' }] }).amount, 3.2);
   assert.strictEqual(parseDeepSeekBalance({ balance: [] }), null);

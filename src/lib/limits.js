@@ -321,19 +321,26 @@ function parseOpenRouterCredits(payload) {
 }
 
 /**
- * DeepSeek `/user/balance` payload: `{ balance: [{ currency, total_balance,
- * granted_balance, topped_up_balance }, …] }`. Prefers the CNY row, falls
- * back to the first parsable one; the quoted figure is total_balance
- * (充值+赠送的可用总额).
+ * DeepSeek `/user/balance` payload. OFFICIAL key is `balance_infos` (per
+ * api-docs.deepseek.com 查询余额): `{ is_available, balance_infos: [{
+ * currency, total_balance, granted_balance, topped_up_balance }] }` — values
+ * are numeric strings. `balance` is kept as a compat alias, and a bare
+ * top-level `total_balance` as a last resort. Prefers the CNY row.
  */
 function parseDeepSeekBalance(payload) {
-  const list = Array.isArray(payload?.balance) ? payload.balance : null;
-  if (!list || list.length === 0) return null;
-  const ordered = [...list.filter((b) => b && b.currency === 'CNY'), ...list];
-  for (const b of ordered) {
-    const amount = numOf(b?.total_balance);
-    if (amount != null) return { amount, currency: b.currency || '' };
+  if (!payload || typeof payload !== 'object') return null;
+  const list = Array.isArray(payload.balance_infos) ? payload.balance_infos
+    : Array.isArray(payload.balance) ? payload.balance
+    : null;
+  if (list) {
+    const ordered = [...list.filter((b) => b && b.currency === 'CNY'), ...list];
+    for (const b of ordered) {
+      const amount = numOf(b?.total_balance);
+      if (amount != null) return { amount, currency: b.currency || '' };
+    }
   }
+  const top = numOf(payload.total_balance);
+  if (top != null) return { amount: top, currency: '' };
   return null;
 }
 
