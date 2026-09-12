@@ -413,6 +413,95 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.match(r.error, /https:\/\/api\.moonshot\.cn\/v1/);
   });
 
+  console.log('--- usage:fetch / CherryIN（NewAPI 账单对 + 访问令牌级联）---');
+  await t('订阅 + 用量两连：可用 = hard_limit - total_usage/100', async () => {
+    await save([{ id: 'ci1', name: 'CherryIN', baseUrl: 'https://open.cherryin.ai', mode: 'balance', apiKey: 'sk-ci-test' }]);
+    setRoutes([
+      { match: '/v1/dashboard/billing/subscription', status: 200, body: { object: 'billing_subscription', hard_limit_usd: 50 } },
+      { match: '/v1/dashboard/billing/usage', status: 200, body: { object: 'list', total_usage: 500 } },
+    ]);
+    const r = await fetchUsage('ci1');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.amount - 45) < 1e-9, 'amount=' + r.usage.amount);
+    assert.strictEqual(r.usage.currency, 'USD');
+  });
+  await t('sk- 被拒（402）后级联访问令牌族：Bearer 失败、裸 token 命中 quota 换算', async () => {
+    await save([{ id: 'ci3', name: 'CherryIN3', baseUrl: 'https://open.cherryin.ai', mode: 'balance', apiKey: 'the-access-token' }]);
+    setRoutes([
+      { match: '/v1/dashboard/billing/subscription', status: 402, body: { error: { message: '无效的令牌' } } },
+      { match: '/v1/dashboard/billing/usage', status: 402, body: { error: { message: '无效的令牌' } } },
+      { match: '/api/user/self', status: 200, body: { message: 'Unauthorized, invalid access token', success: false } },
+      { match: '/api/user/balance', status: 200, body: { message: 'Unauthorized, invalid access token', success: false } },
+      { match: '/api/user/quota', status: 200, body: { success: true, data: { quota: 6900000 } } },
+    ]);
+    const r = await fetchUsage('ci3');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.amount - 13.8) < 1e-9, 'amount=' + r.usage.amount);
+    // 注：stub 仅按 URL 匹配路由，Bearer 变体在 /api/user/quota 上即成功，
+    // 裸 token 变体不会走到——其循环逻辑很薄，留待真实站点验收。
+  });
+  await t('两段全失败：保留服务商原话并提示访问令牌替代路径', async () => {
+    await save([{ id: 'ci4', name: 'CherryIN4', baseUrl: 'https://open.cherryin.ai', mode: 'balance', apiKey: 'sk-ci-test' }]);
+    setRoutes([{ match: 'cherryin.ai', status: 402, body: { error: { message: '无效的令牌' } } }]);
+    const r = await fetchUsage('ci4');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /无效的令牌/);
+    assert.match(r.error, /访问令牌/);
+  });
+  await t('用量查询失败时如实失败（不按 0 已用谎报余额）', async () => {
+    await save([{ id: 'ci2', name: 'CherryIN2', baseUrl: 'https://open.cherryin.ai', mode: 'balance', apiKey: 'sk-ci-test' }]);
+    setRoutes([
+      { match: '/v1/dashboard/billing/subscription', status: 200, body: { hard_limit_usd: 50 } },
+      { match: '/v1/dashboard/billing/usage', status: 500, body: {} },
+    ]);
+    const r = await fetchUsage('ci2');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /用量查询失败/);
+  });
+
+  console.log('--- usage:fetch / GitHub Copilot（两步换票）---');
+  await t('PAT 直接诚实拒绝，零请求', async () => {
+    await save([{ id: 'cp0', name: 'Copilot PAT', baseUrl: 'https://api.github.com', mode: 'plan', apiKey: 'ghp_test' }]);
+    setRoutes([{ match: 'api.github.com', status: 200, body: {} }]);
+    const r = await fetchUsage('cp0');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /GitHub OAuth token/);
+    assert.strictEqual(calls.length, 0, 'PAT must be rejected before any request');
+  });
+  await t('换票 + 快照两步成功：premium 剩余 80 → 已用 20（月）', async () => {
+    await save([{ id: 'cp1', name: 'Copilot', baseUrl: 'https://api.github.com', mode: 'plan', apiKey: 'gho_test' }]);
+    setRoutes([
+      { match: '/copilot_internal/v2/token', status: 200, body: { token: 'jwt-copilot', expires_at: 9999999999 } },
+      { match: '/copilot_internal/user', status: 200, body: { quota_snapshots: { premium_interactions: { percent_remaining: 80, entitlement: 300 } } } },
+    ]);
+    const r = await fetchUsage('cp1');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.usage.fiveHourPct, null);
+    assert.ok(Math.abs(r.usage.weeklyPct - 20) < 1e-9);
+    assert.strictEqual(r.usage.secondLabel, '月');
+    const tokenCall = calls.find((c) => c.url.includes('/copilot_internal/v2/token'));
+    const userCall = calls.find((c) => c.url.includes('/copilot_internal/user'));
+    assert.strictEqual(tokenCall.headers.Authorization, 'Bearer gho_test');
+    assert.strictEqual(userCall.headers.Authorization, 'Bearer jwt-copilot', 'second step must use the exchanged copilot token');
+  });
+  await t('换票 401 → 指出 OAuth token 无效或无 Copilot 授权', async () => {
+    await save([{ id: 'cp2', name: 'Copilot2', baseUrl: 'https://api.github.com', mode: 'plan', apiKey: 'gho_bad' }]);
+    setRoutes([{ match: '/copilot_internal/v2/token', status: 401, body: { message: 'Bad credentials' } }]);
+    const r = await fetchUsage('cp2');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /OAuth token 无效或不含 Copilot 授权（HTTP 401）/);
+  });
+
+  console.log('--- usage:fetch / 火山方舟 Coding Plan（诚实守卫）---');
+  await t('volces host 直接拒答，零探测', async () => {
+    await save([{ id: 'vk1', name: 'Volcano', baseUrl: 'https://ark.cn-beijing.volces.com', mode: 'plan', apiKey: 'ak-test' }]);
+    setRoutes([{ match: 'volces.com', status: 200, body: {} }]);
+    const r = await fetchUsage('vk1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /暂无公开的 Key 直查用量接口/);
+    assert.strictEqual(calls.length, 0, 'volcano guard answers directly, zero probes');
+  });
+
   // save() 是整表替换——把套件开头种下的 p1/p2 原样恢复，后面的用例才看得到
   // 同样的两条订阅（id 与 key 必须逐字相同）。
   await save([

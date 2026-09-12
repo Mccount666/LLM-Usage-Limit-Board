@@ -412,6 +412,20 @@ function parseCopilotQuota(payload) {
   return 100 - remaining;
 }
 
+/**
+ * CherryIN `/api/user/self` / `/api/user/quota` payload (New API user family,
+ * authenticated by the console ACCESS token): `{ success, data: { quota,
+ * used_quota, … } }`. one-api quota convention: 500000 quota = 1 USD.
+ * Auth failure arrives as HTTP 200 + success:false → null (accept rejects).
+ */
+function parseCherryInUserBalance(payload) {
+  if (!payload || payload.success !== true) return null;
+  const d = payload.data && typeof payload.data === 'object' ? payload.data : null;
+  const quota = numOf(d?.quota);
+  if (quota == null || quota < 0) return null;
+  return { amount: quota / 500000, currency: 'USD' };
+}
+
 module.exports = {
   FIVE_HOUR_SPEC,
   WEEKLY_SPEC,
@@ -429,4 +443,5 @@ module.exports = {
   parseMiniMaxRemains,
   parseZhipuQuota,
   parseCopilotQuota,
+  parseCherryInUserBalance,
 };

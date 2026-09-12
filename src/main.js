@@ -1,3 +1,4 @@
+require('fs').appendFileSync('dbg-load.log', 'main.js loaded, hash=' + require('crypto').createHash('md5').update(require('fs').readFileSync('src/main.js')).digest('hex').slice(0,8) + String.fromCharCode(10));
 // Electron main process.
 //
 // Privacy contract (this file is the ONLY place network egress can happen):
@@ -16,6 +17,7 @@ const fs = require('fs');
 const {
   detectLimitPct,
   normalizeBalance,
+  numOf,
   clampPct,
   parseWindowedUsage,
   parseOpenCodeUsage,
@@ -24,6 +26,7 @@ const {
   parseMiniMaxRemains,
   parseZhipuQuota,
   parseCopilotQuota,
+  parseCherryInUserBalance,
   FIVE_HOUR_SPEC,
   WEEKLY_SPEC,
 } = require('./lib/limits');
@@ -768,31 +771,60 @@ async function fetchZhipuPlanUsage(providerIn) {
 const CHERRYIN_SUB_PATH = '/v1/dashboard/billing/subscription';
 const CHERRYIN_USAGE_PATH = '/v1/dashboard/billing/usage';
 async function fetchCherryInBalance(provider) {
+  // 级联两段（同一把 Key，两种凭证体系）：
+  // ① sk- 令牌 → OpenAI 式账单对（/v1/dashboard/billing/*）；
+  // ② 失败则降级控制台「访问令牌」体系 → /api/user/* 族（New API 用户端点，
+  //    官方对计费路由逐步加了用户校验，sk- 可能被 402/401 拒——访问令牌可达）。
+  //    访问令牌两种拼法都试：`Bearer <token>` 与裸 token（one-api 兼容）。
   const diag = newProbeDiag();
   const headers = { Authorization: `Bearer ${provider.apiKey}` };
   const sub = await probeCandidates(provider, 'cherryin-sub', [CHERRYIN_SUB_PATH], headers, (r) => {
     return numOf(r.data?.hard_limit_usd ?? r.data?.system_hard_limit_usd) != null;
   }, diag);
-  if (!sub) {
-    const msg = explainProbeFailure(diag, provider, 'balance');
-    const hint = /404|没有提供可用的用量接口/.test(msg)
-      ? '。CherryIN 的 Base URL 填 https://open.cherryin.ai' : '';
-    return { ok: false, error: msg + hint };
+  if (sub) {
+    const limit = numOf(sub.data?.hard_limit_usd ?? sub.data?.system_hard_limit_usd);
+    const usage = await probeCandidates(provider, 'cherryin-usage', [CHERRYIN_USAGE_PATH], headers, (r) => {
+      return numOf(r.data?.total_usage) != null;
+    }, diag);
+    if (!usage) {
+      // 上限拿到了但用量查询失败——按 0 已用会谎报余额（最危险方向），如实失败。
+      return { ok: false, error: 'CherryIN 订阅上限已取到，但用量查询失败（HTTP 错误），请稍后重试；若持续失败请把 /v1/dashboard/billing/usage 的返回 JSON 发给我适配' };
+    }
+    const used = numOf(usage.data?.total_usage) ?? 0;
+    const amount = limit - used / 100; // one-api 惯例：total_usage 为美分
+    return {
+      ok: true,
+      usage: { mode: 'balance', amount: clampAmount(amount), currency: 'USD', field: 'billing' },
+    };
   }
-  const limit = numOf(sub.data?.hard_limit_usd ?? sub.data?.system_hard_limit_usd);
-  const usage = await probeCandidates(provider, 'cherryin-usage', [CHERRYIN_USAGE_PATH], headers, (r) => {
-    return numOf(r.data?.total_usage) != null;
-  }, diag);
-  if (!usage) {
-    // 上限拿到了但用量查询失败——按 0 已用会谎报余额（最危险方向），如实失败。
-    return { ok: false, error: 'CherryIN 订阅上限已取到，但用量查询失败（HTTP 错误），请稍后重试；若持续失败请把 /v1/dashboard/billing/usage 的返回 JSON 发给我适配' };
+
+  // ② 用户族降级（parseCherryInUserBalance 的 accept 内置 success 检查，
+  //    200+success:false 的鉴权失败体会被拒）。
+  const userDiag = newProbeDiag();
+  const userPaths = ['/api/user/self', '/api/user/balance', '/api/user/quota'];
+  const authVariants = [
+    { Authorization: `Bearer ${provider.apiKey}` },
+    { Authorization: String(provider.apiKey || '') },
+  ];
+  let parsed = null;
+  for (const hv of authVariants) {
+    const res = await probeCandidates(provider, 'cherryin-user', userPaths, hv, (r) => {
+      parsed = parseCherryInUserBalance(r.data);
+      return parsed != null;
+    }, userDiag);
+    if (res) {
+      return {
+        ok: true,
+        usage: { mode: 'balance', amount: clampAmount(parsed.amount), currency: 'USD', field: 'quota' },
+      };
+    }
   }
-  const used = numOf(usage.data?.total_usage) ?? 0;
-  const amount = limit - used / 100; // one-api 惯例：total_usage 为美分
-  return {
-    ok: true,
-    usage: { mode: 'balance', amount: clampAmount(amount), currency: 'USD', field: 'billing' },
-  };
+
+  // 两段都失败：优先转述第一段服务商的原话（用户看到的就是 CherryIN 的措辞），
+  // 并给出「访问令牌」这条已验证存在的替代路径。
+  const msg = explainProbeFailure(diag, provider, 'balance');
+  const hint = '。若 sk- 令牌始终被拒，请改填控制台「设置 → 生成访问令牌」的令牌（两种都会自动尝试）；仍失败请把 /v1/dashboard/billing/subscription 的返回 JSON 发给我适配';
+  return { ok: false, error: msg + hint };
 }
 
 function clampAmount(n) {

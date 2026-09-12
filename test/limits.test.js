@@ -24,6 +24,7 @@ const {
   parseMiniMaxRemains,
   parseZhipuQuota,
   parseCopilotQuota,
+  parseCherryInUserBalance,
 } = require('../src/lib/limits');
 
 let pass = 0;
@@ -275,6 +276,17 @@ t('OpenRouter credits：data 信封 + 字符串值，可用 = 充值 - 已用', 
   assert.ok(Math.abs(r.amount - 12.25) < 1e-9);
   assert.strictEqual(r.currency, 'USD');
 });
+t('CherryIN 用户族：success 信封 + quota 换算（500000 = 1 USD）', () => {
+  const r = parseCherryInUserBalance({ success: true, data: { quota: 6900000, used_quota: 100000 } });
+  assert.ok(Math.abs(r.amount - 13.8) < 1e-9);
+  assert.strictEqual(r.currency, 'USD');
+});
+t('CherryIN 用户族：鉴权失败体（200 + success:false）→ null；负值 → null', () => {
+  assert.strictEqual(parseCherryInUserBalance({ message: 'Unauthorized, invalid access token', success: false }), null);
+  assert.strictEqual(parseCherryInUserBalance({ success: true, data: { quota: -1 } }), null);
+  assert.strictEqual(parseCherryInUserBalance({}), null);
+});
+
 t('OpenRouter：已用超过充值（负值）→ 拒绝；字段缺失 → null', () => {
   assert.strictEqual(parseOpenRouterCredits({ data: { total_credits: '1', total_usage: '2' } }), null);
   assert.strictEqual(parseOpenRouterCredits({ data: { total_credits: '1' } }), null);

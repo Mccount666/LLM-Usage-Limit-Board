@@ -331,7 +331,7 @@ t('P3-C 候选先到先用 + 记住可用路径', () => {
   // branches add seven named kinds (kimi/opencode/moonshot from feedback §27,
   // minimax/openrouter/deepseek/stepfun from §28) — now nine call sites, all
   // still the same first-to-arrive mechanism.
-  assert.strictEqual((MAIN.match(/probeCandidates\(provider, '/g) || []).length, 12);
+  assert.strictEqual((MAIN.match(/probeCandidates\(provider, '/g) || []).length, 13);
   matches(MAIN, /probeCandidates\(provider, 'userinfo'/);
   matches(MAIN, /probeCandidates\(provider, 'balance'/);
   matches(MAIN, /probeCandidates\(provider, 'kimi-usage'/);
@@ -344,6 +344,7 @@ t('P3-C 候选先到先用 + 记住可用路径', () => {
   matches(MAIN, /probeCandidates\(provider, 'zhipu-quota'/);
   matches(MAIN, /probeCandidates\(provider, 'cherryin-sub'/);
   matches(MAIN, /probeCandidates\(provider, 'cherryin-usage'/);
+matches(MAIN, /probeCandidates\(provider, 'cherryin-user'/);
 });
 t('第五轮 P1-B accept 严格且按调用方区分', () => {
   matches(MAIN, /function hasPlanLimits\(/);
