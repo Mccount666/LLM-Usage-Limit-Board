@@ -258,6 +258,27 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.match(r.error, /https:\/\/opencode\.ai\/zen\/go\/v1/);
   });
 
+  console.log('--- usage:fetch / Moonshot 开放平台余额（host api.moonshot.cn）---');
+  await t('/users/me/balance 命中：data 信封里的 balance 解析', async () => {
+    await save([{ id: 'ms1', name: 'Moonshot', baseUrl: 'https://api.moonshot.cn/v1', mode: 'balance', apiKey: 'sk-ms-test' }]);
+    setRoutes([{ match: '/users/me/balance', status: 200, body: { code: 0, data: { balance: '12.5', total_balance: '20' } } }]);
+    const r = await fetchUsage('ms1');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.usage.amount, 12.5);
+    assert.strictEqual(r.usage.currency, '');
+    const hit = calls.find((c) => c.url.includes('/users/me/balance'));
+    assert.ok(hit, 'no balance call recorded');
+    assert.strictEqual(hit.headers.Authorization, 'Bearer sk-ms-test');
+    assert.ok(calls.every((c) => !c.url.includes('/api/user/')), 'one-api candidates must not be probed for moonshot host');
+  });
+  await t('Base URL 漏了 /v1 时，404 诊断里给出正确填法', async () => {
+    await save([{ id: 'ms2', name: 'Moonshot2', baseUrl: 'https://api.moonshot.cn', mode: 'balance', apiKey: 'sk-ms-test' }]);
+    setRoutes([{ match: 'moonshot.cn', status: 404, body: {} }]);
+    const r = await fetchUsage('ms2');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /https:\/\/api\.moonshot\.cn\/v1/);
+  });
+
   // save() 是整表替换——把套件开头种下的 p1/p2 原样恢复，后面的用例才看得到
   // 同样的两条订阅（id 与 key 必须逐字相同）。
   await save([

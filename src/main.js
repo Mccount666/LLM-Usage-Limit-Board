@@ -507,6 +507,28 @@ async function fetchOpenCodeGoPlanUsage(provider) {
   };
 }
 
+// Moonshot 开放平台余额：{base}/users/me/balance（base = https://api.moonshot.cn/v1
+// 或 api.moonshot.ai/v1）。响应形如 { code: 0, data: { balance: "12.34", … } } ——
+// normalizeBalance 的 `root.data ?? root` 对两种包一层都成立；FIELDS 里 balance
+// 优先于 total_balance 之外的字段，取到的即「可用余额」。
+const MOONSHOT_BALANCE_PATHS = ['/users/me/balance'];
+async function fetchMoonshotBalance(provider) {
+  const diag = newProbeDiag();
+  const headers = { Authorization: `Bearer ${provider.apiKey}` };
+  let matched = null;
+  const res = await probeCandidates(provider, 'moonshot-balance', MOONSHOT_BALANCE_PATHS, headers, (r) => {
+    matched = normalizeBalance(r.data);
+    return matched != null;
+  }, diag);
+  if (!res) {
+    const msg = explainProbeFailure(diag, provider, 'balance');
+    const hint = /404|没有提供可用的用量接口/.test(msg)
+      ? '。Moonshot 开放平台的 Base URL 应为 https://api.moonshot.cn/v1' : '';
+    return { ok: false, error: msg + hint };
+  }
+  return { ok: true, usage: { mode: 'balance', ...matched } };
+}
+
 // --- Failure diagnostics ---------------------------------------------------
 //
 // Probing several endpoints means a failure can come from very different
@@ -712,6 +734,11 @@ function probeCandidates(provider, kind, paths, headers, accept, diag) {
 }
 
 async function fetchBalanceUsage(provider) {
+  // Moonshot 开放平台（按量计费）不走 one-api 方言——专用余额端点。
+  const bh = hostOf(provider.baseUrl.replace(/\/+$/, ''));
+  if (bh === 'moonshot.cn' || bh.endsWith('.moonshot.cn') || bh === 'moonshot.ai' || bh.endsWith('.moonshot.ai')) {
+    return fetchMoonshotBalance(provider);
+  }
   const balanceCandidates = ['/api/user/balance', '/api/user/wallet', '/api/user/quota'];
   // `matched` is set by accept() for the winning candidate only — probeCandidates
   // stops calling accept once a winner is found, so we parse once, not twice (P3-I).
