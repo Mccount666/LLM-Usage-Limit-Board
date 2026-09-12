@@ -331,15 +331,21 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
   });
 
   console.log('--- usage:fetch / MiniMax Token Plan（host minimaxi.com）---');
-  await t('/coding_plan/remains 命中：usage_count 语义为剩余 — 1500/1200 → 20%，周侧灰', async () => {
+  await t('/coding_plan/remains 命中：general 行 remaining_percent → 5h 41% / 周 5%（周列不再被写死 null）', async () => {
     await save([{ id: 'mm1', name: 'MiniMax', baseUrl: 'https://www.minimaxi.com', mode: 'plan', apiKey: 'sk-mm-test' }]);
     setRoutes([{ match: '/coding_plan/remains', status: 200, body: { model_remains: [
-      { model_name: 'MiniMax-M2.5', current_interval_total_count: 1500, current_interval_usage_count: 1200, start_time: 1, end_time: 2, remains_time: 3 },
+      { model_name: 'general', current_interval_total_count: 0, current_interval_usage_count: 0,
+        current_weekly_total_count: 0, current_weekly_usage_count: 0,
+        current_interval_remaining_percent: 59, current_weekly_remaining_percent: 95,
+        start_time: 1, end_time: 2, remains_time: 3 },
+      { model_name: 'video', current_interval_total_count: 3, current_interval_usage_count: 3,
+        current_weekly_total_count: 21, current_weekly_usage_count: 21,
+        current_interval_remaining_percent: 100, current_weekly_remaining_percent: 100 },
     ], base_resp: { status_code: 0, status_msg: 'success' } } }]);
     const r = await fetchUsage('mm1');
     assert.strictEqual(r.ok, true);
-    assert.ok(Math.abs(r.usage.fiveHourPct - 20) < 1e-9, 'fiveHourPct=' + r.usage.fiveHourPct);
-    assert.strictEqual(r.usage.weeklyPct, null);
+    assert.ok(Math.abs(r.usage.fiveHourPct - 41) < 1e-9, 'fiveHourPct=' + r.usage.fiveHourPct);
+    assert.ok(Math.abs(r.usage.weeklyPct - 5) < 1e-9, 'weeklyPct=' + r.usage.weeklyPct);
     assert.ok(calls.every((c) => !c.url.includes('/api/user/')), 'one-api candidates must not be probed');
   });
 

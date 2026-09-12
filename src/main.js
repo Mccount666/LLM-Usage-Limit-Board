@@ -477,7 +477,8 @@ async function fetchPlanUsage(provider) {
     return fetchOpenCodeGoPlanUsage(provider);
   }
   // MiniMax Token Plan：GET {base}/v1/api/openplatform/coding_plan/remains。
-  // 只覆盖 5h 滚动窗口，响应无周侧 → weeklyPct 留 null（灰 "--"）。
+  // 5h 滚动窗口 + 周窗口都有（行选 `general`、读 `*_remaining_percent`，
+  // 详见 fetchMiniMaxPlanUsage 的注释）。
   if (host === 'minimaxi.com' || host.endsWith('.minimaxi.com') ||
       host === 'minimax.io' || host.endsWith('.minimax.io')) {
     return fetchMiniMaxPlanUsage(provider);
@@ -689,9 +690,11 @@ async function fetchStepFunBalance(provider) {
 }
 
 // MiniMax Token Plan 用量：{base}/v1/api/openplatform/coding_plan/remains
-// （base 填 https://www.minimaxi.com）。语义陷阱（已对 coding-plan-monitor 的
-// minimax.ts 核实）：current_interval_usage_count 是「剩余」不是「已用」——
-// used = total - 剩余。解析交给 parseMiniMaxRemains，这里只做编排与提示。
+// （base 填 https://www.minimaxi.com）。字段语义与行选择都对**真实响应**核实过
+// （2026-09-12 实发探测）：coding plan 行是 `general`（不是社区文档里的
+// MiniMax-M2.5，且同响应的 `video` 是另一份额度），真实数值在
+// `*_remaining_percent`；5h 与周两个窗口都有。解析交给 parseMiniMaxRemains，
+// 这里只做编排与提示。
 const MINIMAX_REMAINS_PATHS = ['/v1/api/openplatform/coding_plan/remains'];
 async function fetchMiniMaxPlanUsage(provider) {
   const diag = newProbeDiag();
@@ -708,13 +711,13 @@ async function fetchMiniMaxPlanUsage(provider) {
       ? '。MiniMax Token Plan 的 Base URL 填 https://www.minimaxi.com' : '';
     return { ok: false, error: msg + hint };
   }
-  const pct = parseMiniMaxRemains(res.data);
+  const p = parseMiniMaxRemains(res.data);
   return {
     ok: true,
     usage: {
       mode: 'plan',
-      fiveHourPct: pct == null ? null : clampPct(pct),
-      weeklyPct: null, // 响应无周侧——留灰，不伪造
+      fiveHourPct: p.fiveHourPct == null ? null : clampPct(p.fiveHourPct),
+      weeklyPct: p.weeklyPct == null ? null : clampPct(p.weeklyPct),
     },
   };
 }

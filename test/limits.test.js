@@ -325,21 +325,81 @@ t('DeepSeek：无 CNY 行回落首行；空数组/坏形状 → null', () => {
   assert.strictEqual(parseDeepSeekBalance({ balance: [] }), null);
   assert.strictEqual(parseDeepSeekBalance({}), null);
 });
-t('MiniMax：usage_count 语义为剩余 — 1500/1200 → 已用 300 → 20%', () => {
-  const r = parseMiniMaxRemains({ model_remains: [
+// 真实响应，2026-09-12 对该账号实发一次请求取得（涂掉 key 后原样固化）。
+// 旧实现因 general 行 counts 全为 0 而跳过它、落到 video 行 3/3 → 恒返回 0%，
+// 界面表现为绿色 0.0% 永不变化。这条 fixture 就是那个 bug 的反例。
+const MINIMAX_REAL = {
+  model_remains: [
+    { start_time: 1789214400000, end_time: 1789228800000, remains_time: 599114,
+      current_interval_total_count: 0, current_interval_usage_count: 0, model_name: 'general',
+      current_weekly_total_count: 0, current_weekly_usage_count: 0,
+      weekly_start_time: 1788710400000, weekly_end_time: 1789315200000, weekly_remains_time: 86999114,
+      current_interval_status: 1, current_interval_remaining_percent: 59,
+      current_weekly_status: 1, current_weekly_remaining_percent: 95 },
+    { start_time: 1789142400000, end_time: 1789228800000, remains_time: 599114,
+      current_interval_total_count: 3, current_interval_usage_count: 3, model_name: 'video',
+      current_weekly_total_count: 21, current_weekly_usage_count: 21,
+      weekly_start_time: 1788710400000, weekly_end_time: 1789315200000, weekly_remains_time: 86999114,
+      current_interval_status: 1, current_interval_remaining_percent: 100,
+      current_weekly_status: 1, current_weekly_remaining_percent: 100 },
+  ],
+  base_resp: { status_code: 0, status_msg: 'success' },
+};
+
+t('MiniMax 真实响应：选 general 行读 remaining_percent — 5h 41% / 周 5%', () => {
+  const r = parseMiniMaxRemains(MINIMAX_REAL);
+  assert.ok(r, 'real payload must parse');
+  assert.ok(Math.abs(r.fiveHourPct - 41) < 1e-9, 'fiveHourPct=' + r.fiveHourPct);
+  assert.ok(Math.abs(r.weeklyPct - 5) < 1e-9, 'weeklyPct=' + r.weeklyPct);
+});
+t('MiniMax 反例：general 行在场时绝不读 video 份额度（3/3 → 0% 是旧 bug）', () => {
+  const r = parseMiniMaxRemains(MINIMAX_REAL);
+  // 判别力锚点：旧实现返回裸数字 0，取 .fiveHourPct 得到 undefined，
+  // 单看 notStrictEqual(…, 0) 会假绿——所以先钉住返回形状。
+  assert.strictEqual(typeof r, 'object', '解析结果必须是双窗口对象，不是裸百分比数字');
+  assert.ok(r !== null, 'real payload must parse');
+  assert.notStrictEqual(r.fiveHourPct, 0, 'video 行 3/3 的 0% 被当成套餐用量');
+  assert.notStrictEqual(r.weeklyPct, 0, 'video 行 21/21 的 0% 被当成周用量');
+});
+t('MiniMax：percent 字段优先于 counts；只有 counts 时才回落到计数换算', () => {
+  // 故意让两者矛盾（counts 说已用 100%、percent 说已用 75%）以证明优先级。
+  const viaPct = parseMiniMaxRemains({ model_remains: [
+    { model_name: 'general', current_interval_total_count: 200, current_interval_usage_count: 0,
+      current_interval_remaining_percent: 25 },
+  ] });
+  assert.ok(Math.abs(viaPct.fiveHourPct - 75) < 1e-9, 'fiveHourPct=' + viaPct.fiveHourPct);
+  // 无 percent 字段的旧形状 → counts 兜底；usage_count 语义为剩余。
+  const viaCounts = parseMiniMaxRemains({ model_remains: [
     { model_name: 'MiniMax-M2.5', current_interval_total_count: 1500, current_interval_usage_count: 1200 },
   ] });
-  assert.ok(Math.abs(r - 20) < 1e-9);
+  assert.ok(Math.abs(viaCounts.fiveHourPct - 20) < 1e-9, 'fiveHourPct=' + viaCounts.fiveHourPct);
+  assert.strictEqual(viaCounts.weeklyPct, null);
 });
-t('MiniMax：优先 M2.5 行；剩余为负的行跳过；空/坏形状 → null', () => {
+t('MiniMax：缺一侧留 null 不伪造 0（周侧缺 → weeklyPct null）', () => {
   const r = parseMiniMaxRemains({ model_remains: [
-    { model_name: 'other-model', current_interval_total_count: 100, current_interval_usage_count: 10 },
-    { model_name: 'MiniMax-M2.5', current_interval_total_count: 200, current_interval_usage_count: 50 },
+    { model_name: 'general', current_interval_remaining_percent: 20 },
   ] });
-  assert.ok(Math.abs(r - 75) < 1e-9);
+  assert.ok(Math.abs(r.fiveHourPct - 80) < 1e-9);
+  assert.strictEqual(r.weeklyPct, null);
+});
+t('MiniMax：plan 行存在但无数据 → null，不回落到 video 等其它额度行', () => {
+  assert.strictEqual(parseMiniMaxRemains({ model_remains: [
+    { model_name: 'general', current_interval_total_count: 0, current_interval_usage_count: 0 },
+    { model_name: 'video', current_interval_total_count: 3, current_interval_usage_count: 3 },
+  ] }), null);
+});
+t('MiniMax：无任何 plan 行时才扫描全部行（旧形状兼容）', () => {
+  const r = parseMiniMaxRemains({ model_remains: [
+    { model_name: 'whatever', current_interval_total_count: 100, current_interval_usage_count: 10 },
+  ] });
+  assert.ok(Math.abs(r.fiveHourPct - 90) < 1e-9, 'fiveHourPct=' + r.fiveHourPct);
+});
+t('MiniMax：负剩余 / 剩余超总额 / 越界 percent 均不产生读数；空/坏形状 → null', () => {
+  assert.strictEqual(parseMiniMaxRemains({ model_remains: [{ model_name: 'x', current_interval_total_count: 100, current_interval_usage_count: -5 }] }), null);
+  assert.strictEqual(parseMiniMaxRemains({ model_remains: [{ model_name: 'x', current_interval_total_count: 100, current_interval_usage_count: 150 }] }), null);
+  assert.strictEqual(parseMiniMaxRemains({ model_remains: [{ model_name: 'x', current_interval_remaining_percent: 120 }] }), null);
   assert.strictEqual(parseMiniMaxRemains({ model_remains: [] }), null);
   assert.strictEqual(parseMiniMaxRemains({}), null);
-  assert.strictEqual(parseMiniMaxRemains({ model_remains: [{ model_name: 'x', current_interval_total_count: 100, current_interval_usage_count: -5 }] }), null);
 });
 
 console.log('\nlimits.test: ' + pass + ' passed, ' + failures.length + ' failed');

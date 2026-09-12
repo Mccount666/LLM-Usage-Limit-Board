@@ -345,25 +345,73 @@ function parseDeepSeekBalance(payload) {
 }
 
 /**
+ * `*_remaining_percent` is a REMAINING share (the field name says so, and the
+ * live payload cross-checks it: the `video` row carries counts 3/3 together
+ * with `current_interval_remaining_percent: 100`). Convert to the used share
+ * this board displays. Out-of-range values are missing data, not a reading.
+ */
+function usedFromRemainingPct(remaining) {
+  const r = numOf(remaining);
+  if (r == null || r < 0 || r > 100) return null;
+  return 100 - r;
+}
+
+/**
+ * Legacy count pair → used share. `current_interval_usage_count` is the
+ * REMAINING count, not the used one (same live cross-check as above), so
+ * used = total - remaining. A row whose remaining is negative or exceeds its
+ * total is malformed and yields null instead of a nonsense percentage.
+ */
+function usedFromCounts(totalRaw, remainingRaw) {
+  const total = numOf(totalRaw);
+  const remaining = numOf(remainingRaw);
+  if (total == null || total <= 0 || remaining == null || remaining < 0) return null;
+  const used = total - remaining;
+  if (used < 0) return null;
+  return (used / total) * 100;
+}
+
+/**
  * MiniMax `/coding_plan/remains` payload: `{ model_remains: [{…}], base_resp }`.
- * ⚠️ SEMANTIC TRAP (verified against coding-plan-monitor's minimax.ts):
- * `current_interval_usage_count` is the REMAINING count, not the used count —
- * used = total - remaining. Prefers the MiniMax-M2.5 row. The response covers
- * the 5h rolling window only; there is no weekly side (caller reports null).
+ *
+ * ⚠️ Two traps, both found by probing the LIVE endpoint (2026-09-12) — the
+ * community write-ups this was originally modelled on describe neither:
+ *
+ *  1. The coding-plan row is `general`. It is NOT named `MiniMax-M2.5` (that
+ *     name appears in older write-ups and is absent from the real response),
+ *     and `video` is a SEPARATE quota. Picking `video` because it was the only
+ *     row with a non-zero total pinned the widget at a green 0.0% forever.
+ *  2. On the `general` row every count field is 0 while the authoritative
+ *     values live in `current_interval_remaining_percent` /
+ *     `current_weekly_remaining_percent`. The count pair is only a fallback for
+ *     payloads that carry no percent fields.
+ *
+ * Both windows exist: `current_*` is the 5h rolling window and
+ * `current_weekly_*` the 7-day one — the earlier "no weekly side" note was
+ * wrong. Missing sides stay null so the renderer shows its grey "--" rather
+ * than a fabricated 0%.
  */
 function parseMiniMaxRemains(payload) {
   const list = Array.isArray(payload?.model_remains) ? payload.model_remains : null;
   if (!list || list.length === 0) return null;
-  const ordered = [...list.filter((m) => m && m.model_name === 'MiniMax-M2.5'), ...list];
+  const rows = list.filter((m) => m && typeof m === 'object');
+  if (rows.length === 0) return null;
+
+  // Once a plan row can be identified, only those rows are eligible: falling
+  // back to a sibling quota would be the same wrong-row bug in a new disguise.
+  // Scan everything only when the payload names no plan row at all.
+  const preferred = rows.filter((m) => m.model_name === 'general' || m.model_name === 'MiniMax-M2.5');
+  const ordered = preferred.length ? preferred : rows;
+
   for (const m of ordered) {
-    const total = numOf(m?.current_interval_total_count);
-    const remaining = numOf(m?.current_interval_usage_count);
-    // Negative remaining is a malformed row (it would inflate "used" past the
-    // total) — skip it and try the next model instead of reporting nonsense.
-    if (total == null || total <= 0 || remaining == null || remaining < 0) continue;
-    const used = total - remaining;
-    if (used < 0) continue;
-    return (used / total) * 100;
+    const fiveHourPct =
+      usedFromRemainingPct(m.current_interval_remaining_percent) ??
+      usedFromCounts(m.current_interval_total_count, m.current_interval_usage_count);
+    const weeklyPct =
+      usedFromRemainingPct(m.current_weekly_remaining_percent) ??
+      usedFromCounts(m.current_weekly_total_count, m.current_weekly_usage_count);
+    if (fiveHourPct == null && weeklyPct == null) continue;
+    return { fiveHourPct, weeklyPct };
   }
   return null;
 }
