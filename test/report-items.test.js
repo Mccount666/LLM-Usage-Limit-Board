@@ -323,7 +323,15 @@ t('P3-C 候选先到先用 + 记住可用路径', () => {
   // 第五轮 P1-A: Promise.all waits for the SLOWEST candidate, which held a
   // 10ms answer hostage for 8s. Must be first-to-arrive instead.
   assert.ok(!/await Promise\.all\(/.test(MAIN), 'Promise.all would wait for the slowest candidate');
-  assert.strictEqual((MAIN.match(/probeCandidates\(provider, '/g) || []).length, 2);
+  // Single-mechanism invariant: EVERY candidate probe goes through
+  // probeCandidates. Originally 2 call sites (userinfo + balance); the Kimi
+  // Code / OpenCode Go provider branches (feedback §二十七) add two more —
+  // still the same mechanism, now four named kinds.
+  assert.strictEqual((MAIN.match(/probeCandidates\(provider, '/g) || []).length, 4);
+  matches(MAIN, /probeCandidates\(provider, 'userinfo'/);
+  matches(MAIN, /probeCandidates\(provider, 'balance'/);
+  matches(MAIN, /probeCandidates\(provider, 'kimi-usage'/);
+  matches(MAIN, /probeCandidates\(provider, 'opencode-usage'/);
 });
 t('第五轮 P1-B accept 严格且按调用方区分', () => {
   matches(MAIN, /function hasPlanLimits\(/);

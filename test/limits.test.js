@@ -17,6 +17,8 @@ const {
   parseLimit,
   asPct,
   getPath,
+  parseWindowedUsage,
+  parseOpenCodeUsage,
 } = require('../src/lib/limits');
 
 let pass = 0;
@@ -141,6 +143,79 @@ t('数字字符串与百分号路径不受影响（既有行为钉住）', () =>
   assert.strictEqual(numOf('42%'), 42);
   assert.deepStrictEqual(parseLimit(42), { value: 42, explicit: false });
   assert.strictEqual(normalizeBalance({ data: { balance: '12.5' } }).amount, 12.5);
+});
+
+// --- parseWindowedUsage（Kimi Code /usages）/ parseOpenCodeUsage（Go /usage）---
+
+console.log('--- 窗口用量解析（Kimi Code / OpenCode Go）---');
+t('Kimi 形状1：300 MINUTE 窗口 + model_name:"all" 周行', () => {
+  const r = parseWindowedUsage({ data: [
+    { model_name: 'kimi-k2', window: { duration: 300, timeUnit: 'MINUTE' }, limit: 100, used: 25 },
+    { model_name: 'all', limit: 7000, used: 700 },
+  ] });
+  assert.strictEqual(r.fiveHourPct, 25);
+  assert.strictEqual(r.weeklyPct, 10);
+});
+t('Kimi 形状1：5 HOUR + 7 DAY 窗口同样识别', () => {
+  const r = parseWindowedUsage({ data: [
+    { window: { duration: 5, timeUnit: 'HOUR' }, limit_amount: 200, used_amount: 50 },
+    { window: { duration: 7, timeUnit: 'DAY' }, limit_amount: 1000, used_amount: 250 },
+  ] });
+  assert.strictEqual(r.fiveHourPct, 25);
+  assert.strictEqual(r.weeklyPct, 25);
+});
+t('Kimi：remaining 反推 used = limit - remaining', () => {
+  const r = parseWindowedUsage({ data: [
+    { window: { duration: 300, timeUnit: 'MINUTE' }, limit: 100, remaining: 90 },
+    { model_name: 'all', limit: 100, remaining: 80 },
+  ] });
+  assert.strictEqual(r.fiveHourPct, 10);
+  assert.strictEqual(r.weeklyPct, 20);
+});
+t('Kimi 形状2：数字嵌在 detail、window 在条目上', () => {
+  const r = parseWindowedUsage({ usage: {}, limits: [
+    { window: { duration: 300, timeUnit: 'MINUTE' }, detail: { limit: 100, used: 50 } },
+    { window: { duration: 168, timeUnit: 'HOUR' }, detail: { limit: 1000, used: 250 } },
+  ] });
+  assert.strictEqual(r.fiveHourPct, 50);
+  assert.strictEqual(r.weeklyPct, 25);
+});
+t('Kimi：limit 缺失的一侧留 null，不猜分母；另一侧照常', () => {
+  const r = parseWindowedUsage({ data: [
+    { window: { duration: 300, timeUnit: 'MINUTE' }, used: 30 },
+    { model_name: 'all', limit: 100, used: 10 },
+  ] });
+  assert.strictEqual(r.fiveHourPct, null);
+  assert.strictEqual(r.weeklyPct, 10);
+});
+t('Kimi：无窗口且无 "all" 行 -> 双 null（探测会被拒绝，不缓存）', () => {
+  const r = parseWindowedUsage({ data: [{ limit: 10, used: 5 }] });
+  assert.deepStrictEqual(r, { fiveHourPct: null, weeklyPct: null });
+});
+t('Kimi：坏形状不抛错 -> 双 null', () => {
+  assert.deepStrictEqual(parseWindowedUsage({}), { fiveHourPct: null, weeklyPct: null });
+  assert.deepStrictEqual(parseWindowedUsage({ data: [] }), { fiveHourPct: null, weeklyPct: null });
+  assert.deepStrictEqual(parseWindowedUsage(null), { fiveHourPct: null, weeklyPct: null });
+});
+t('OpenCode Go：rolling/weekly percent 直读（0-100 不再乘 100）', () => {
+  const r = parseOpenCodeUsage({ usage: {
+    rolling: { status: 'ok', percent: 19.5, resetsAt: '2026-09-12T00:00:00Z' },
+    weekly: { status: 'ok', percent: 7, resetsAt: '2026-09-15T00:00:00Z' },
+    monthly: { status: 'ok', percent: 3, resetsAt: '2026-10-01T00:00:00Z' },
+  } });
+  assert.strictEqual(r.fiveHourPct, 19.5);
+  assert.strictEqual(r.weeklyPct, 7);
+});
+t('OpenCode Go：rate-limited 状态不影响 percent 读取；字符串数字可用', () => {
+  const r = parseOpenCodeUsage({ usage: {
+    rolling: { status: 'rate-limited', percent: '100' },
+  } });
+  assert.strictEqual(r.fiveHourPct, 100);
+  assert.strictEqual(r.weeklyPct, null);
+});
+t('OpenCode Go：坏形状 -> 双 null', () => {
+  assert.deepStrictEqual(parseOpenCodeUsage({}), { fiveHourPct: null, weeklyPct: null });
+  assert.deepStrictEqual(parseOpenCodeUsage({ usage: { rolling: { percent: [] } } }), { fiveHourPct: null, weeklyPct: null });
 });
 
 console.log('\nlimits.test: ' + pass + ' passed, ' + failures.length + ' failed');

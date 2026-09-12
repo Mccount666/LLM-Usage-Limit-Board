@@ -4,8 +4,16 @@
 
 | 模式 | 适用场景 | 显示内容 |
 | --- | --- | --- |
-| **Coding Plan** | Claude Code / Cursor / OpenAI Codex / 包月套餐 | 5h 限额 % + 周限额 % |
+| **Coding Plan** | Kimi Code / OpenCode Go / Claude Code / Cursor / OpenAI Codex / 包月套餐 | 5h 限额 % + 周限额 % |
 | **余额（中转站）** | OneAPI / NewAPI / 自建中转 / 按量 API | 账户余额 |
+
+内置识别的服务商（都走 **Coding Plan** 模式，按下面填即可）：
+
+| 服务商 | Base URL | API Key | 说明 |
+| --- | --- | --- | --- |
+| **Kimi Code** | `https://api.kimi.com/coding/v1` | Kimi **Code 控制台**的 Key（`sk-kimi-…`） | 不是 platform.moonshot.ai 开放平台的 `sk-` Key |
+| **OpenCode Go** | `https://opencode.ai/zen/go/v1` | OpenCode Go 的 API Key | 月度窗口暂无看板列，不显示 |
+| OneAPI / NewAPI 网关 | 中转站根地址 | 网关 Key | 按网关返回的字段自动识别 |
 
 ## 隐私原则（多用户可放心使用）
 

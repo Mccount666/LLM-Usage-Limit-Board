@@ -17,6 +17,8 @@ const {
   detectLimitPct,
   normalizeBalance,
   clampPct,
+  parseWindowedUsage,
+  parseOpenCodeUsage,
   FIVE_HOUR_SPEC,
   WEEKLY_SPEC,
 } = require('./lib/limits');
@@ -406,6 +408,21 @@ async function fetchPlanUsage(provider) {
     return { ok: false, error: 'Anthropic 未提供 5h/周限额接口' };
   }
 
+  // Kimi Code (Kimi For Coding): GET {base}/usages (fallback /usage) with the
+  // Kimi Code console key (sk-kimi-...). Community-verified endpoint — the
+  // CLI's own /usage command and kimi-code-usage both speak it. The CLI's
+  // User-Agent is sent because the endpoint is undocumented and may gate on
+  // client identity; it is the user's own quota being queried.
+  if (host === 'kimi.com' || host.endsWith('.kimi.com')) {
+    return fetchKimiPlanUsage(provider);
+  }
+  // OpenCode Go: GET {base}/usage with the Go API key. Response shape from the
+  // opencode console source (packages/console/app/src/routes/zen/go/v1/usage.ts):
+  // { usage: { rolling/weekly/monthly: { status, percent, resetsAt } } }.
+  if (host === 'opencode.ai' || host.endsWith('.opencode.ai')) {
+    return fetchOpenCodeGoPlanUsage(provider);
+  }
+
   // Strict accept: a 200 with `{success:false,...}` or a user object without any
   // limit field must NOT be accepted, or it would be cached and the endpoint
   // that does carry 5h/weekly data would never be tried again.
@@ -426,6 +443,66 @@ async function fetchPlanUsage(provider) {
       mode: 'plan',
       fiveHourPct: fiveHourPct == null ? null : clampPct(fiveHourPct),
       weeklyPct: weeklyPct == null ? null : clampPct(weeklyPct),
+    },
+  };
+}
+
+// Kimi Code 用量：{base}/usages 优先、/usage 回落（并发探测，先到先用并记忆，
+// 稳态轮询只发一枪）。语义沿用 plan 模式：解析不出的一侧留 null（灰 "--"），
+// 绝不伪造 0%。
+const KIMI_USAGE_PATHS = ['/usages', '/usage'];
+async function fetchKimiPlanUsage(provider) {
+  const diag = newProbeDiag();
+  const headers = {
+    Authorization: `Bearer ${provider.apiKey}`,
+    'User-Agent': 'KimiCLI/1.6',
+  };
+  const res = await probeCandidates(provider, 'kimi-usage', KIMI_USAGE_PATHS, headers, (r) => {
+    const p = parseWindowedUsage(r.data);
+    return p.fiveHourPct != null || p.weeklyPct != null;
+  }, diag);
+  if (!res) {
+    const msg = explainProbeFailure(diag, provider, 'plan');
+    // 404 主导的失败大概率是 Base URL 没带 /coding/v1 —— 把正确填法直接给出来。
+    const hint = /404|没有提供可用的用量接口/.test(msg)
+      ? '。Kimi Code 的 Base URL 应为 https://api.kimi.com/coding/v1' : '';
+    return { ok: false, error: msg + hint };
+  }
+  const p = parseWindowedUsage(res.data);
+  return {
+    ok: true,
+    usage: {
+      mode: 'plan',
+      fiveHourPct: p.fiveHourPct == null ? null : clampPct(p.fiveHourPct),
+      weeklyPct: p.weeklyPct == null ? null : clampPct(p.weeklyPct),
+    },
+  };
+}
+
+// OpenCode Go 用量：{base}/usage（base = https://opencode.ai/zen/go/v1）。
+// 401 = Key 无效，403 = 无 Go 订阅（EntitlementError）——都落进认证分支，
+// 服务商原话经 gatewayMessage 提取后随错误文案展示。
+const OPENCODE_USAGE_PATHS = ['/usage'];
+async function fetchOpenCodeGoPlanUsage(provider) {
+  const diag = newProbeDiag();
+  const headers = { Authorization: `Bearer ${provider.apiKey}` };
+  const res = await probeCandidates(provider, 'opencode-usage', OPENCODE_USAGE_PATHS, headers, (r) => {
+    const p = parseOpenCodeUsage(r.data);
+    return p.fiveHourPct != null || p.weeklyPct != null;
+  }, diag);
+  if (!res) {
+    const msg = explainProbeFailure(diag, provider, 'plan');
+    const hint = /404|没有提供可用的用量接口/.test(msg)
+      ? '。OpenCode Go 的 Base URL 应为 https://opencode.ai/zen/go/v1' : '';
+    return { ok: false, error: msg + hint };
+  }
+  const p = parseOpenCodeUsage(res.data);
+  return {
+    ok: true,
+    usage: {
+      mode: 'plan',
+      fiveHourPct: p.fiveHourPct == null ? null : clampPct(p.fiveHourPct),
+      weeklyPct: p.weeklyPct == null ? null : clampPct(p.weeklyPct),
     },
   };
 }
@@ -474,13 +551,24 @@ function gatewayMessage(body) {
   // words sitting in a later key. Walk the keys in order and take the first
   // value that actually satisfies the contract.
   const m = [body.message, body.error, body.msg].find((v) => typeof v === 'string' && v.trim());
-  return m ?? '';
+  if (m) return m;
+  // opencode-style nested error: { type: 'error', error: { type, message } }.
+  // Only consulted when no flat string key matched, so existing contracts
+  // (N-30's "first usable string" semantics) are untouched.
+  const nested = body.error;
+  if (nested && typeof nested === 'object' && typeof nested.message === 'string' && nested.message.trim()) {
+    return nested.message.trim();
+  }
+  return '';
 }
 
 function explainProbeFailure(diag, provider, mode) {
   const auth = diag.statuses.find((s) => s === 401 || s === 403);
   if (auth) {
-    return `API Key 无效或权限不足（HTTP ${auth}），请检查该订阅的 Key 是否填错/已失效`;
+    // The gateway's own words (opencode 401 "Unauthorized" / 403 "OpenCode Go
+    // subscription required.") disambiguate a bad key from a missing plan.
+    const gw = diag.messages.find(Boolean);
+    return `API Key 无效或权限不足（HTTP ${auth}）${gw ? `：${gw}` : ''}，请检查该订阅的 Key 是否填错/已失效`;
   }
   // Per-class tally (N-16 + N-20): a mixed outcome must report every class it
   // contains — 404s, candidates that never answered, and candidates that

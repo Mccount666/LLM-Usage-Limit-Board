@@ -10,3 +10,7 @@ dist/
 # Review-agent forensics tooling (not project source; kept on disk).
 # Whole class: this project ships no PowerShell of its own.
 tools/*.ps1
+
+# User-convenience copy of the installer at the repo root (canonical
+# artifact stays in dist/). Not source; never commit binaries.
+/LLM Usage Limit Board-*.exe

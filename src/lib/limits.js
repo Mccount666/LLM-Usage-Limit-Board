@@ -192,6 +192,106 @@ function normalizeBalance(root) {
   return null;
 }
 
+// --- Windowed plan-usage payloads (Kimi Code /usages, OpenCode Go /usage) ---
+//
+// Two provider dialects, one result shape: { fiveHourPct, weeklyPct } where
+// null means "this window is not in the response" — never coerced to 0, for
+// the same reason as 第六轮 P1-A (a green 0% bar reads as "quota fine", the
+// worst direction to be wrong in). Pure functions: no fetch, no Electron.
+
+const WINDOW_MINUTES = { MINUTE: 1, HOUR: 60, DAY: 1440, WEEK: 10080 };
+const FIVE_HOUR_MINUTES = 300;
+const WEEKLY_MINUTES = 10080;
+
+/** Window length in minutes from `{ duration, timeUnit }`; null if unparsable. */
+function windowMinutes(w) {
+  if (!w || typeof w !== 'object') return null;
+  const d = numOf(w.duration);
+  const u = typeof w.timeUnit === 'string' ? w.timeUnit.toUpperCase() : '';
+  if (d == null || d <= 0 || !(u in WINDOW_MINUTES)) return null;
+  return d * WINDOW_MINUTES[u];
+}
+
+/**
+ * used/limit out of one windowed item, tolerant to the field spellings
+ * observed in the wild (kimi-code-usage providers/kimi.py): limit|limit_amount,
+ * used|used_amount, or remaining -> used = limit - remaining. Shape 2 of that
+ * dialect nests the numbers under `detail` while `window` stays on the item.
+ * A missing side is null — abstain instead of guessing a denominator.
+ */
+function windowItemPair(item) {
+  if (!item || typeof item !== 'object') return null;
+  const fields = item.detail && typeof item.detail === 'object' ? item.detail : item;
+  const limit = numOf(fields.limit ?? fields.limit_amount);
+  let used = numOf(fields.used ?? fields.used_amount);
+  if (used == null && limit != null) {
+    const remaining = numOf(fields.remaining);
+    if (remaining != null) used = limit - remaining;
+  }
+  if (limit == null || limit <= 0 || used == null) return null;
+  return { used, limit };
+}
+
+function pairPct(pair) {
+  return (pair.used / pair.limit) * 100;
+}
+
+/**
+ * Exact-window match first; then the caller's fallback predicate — Kimi's
+ * weekly summary arrives as a `model_name:'all'` row with no window object.
+ */
+function pickWindowItem(items, wantMinutes, fallbackPred) {
+  if (!Array.isArray(items)) return null;
+  for (const it of items) {
+    if (windowMinutes(it?.window) === wantMinutes) {
+      const pair = windowItemPair(it);
+      if (pair) return pair;
+    }
+  }
+  if (fallbackPred) {
+    for (const it of items) {
+      if (fallbackPred(it)) {
+        const pair = windowItemPair(it);
+        if (pair) return pair;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Kimi Code `/usages` payload. Shape 1: `{ data: [...] }`. Shape 2:
+ * `{ usage: ..., limits: [...] }` (numbers may sit under each item's `detail`).
+ */
+function parseWindowedUsage(payload) {
+  let items = Array.isArray(payload?.data) ? payload.data : null;
+  if (!items && Array.isArray(payload?.limits)) items = payload.limits;
+  if (!items) return { fiveHourPct: null, weeklyPct: null };
+  const fiveHour = pickWindowItem(items, FIVE_HOUR_MINUTES);
+  const weekly = pickWindowItem(items, WEEKLY_MINUTES,
+    (it) => it && typeof it === 'object' && it.model_name === 'all');
+  return {
+    fiveHourPct: fiveHour ? pairPct(fiveHour) : null,
+    weeklyPct: weekly ? pairPct(weekly) : null,
+  };
+}
+
+/**
+ * OpenCode Go `/usage` payload — shape taken from the opencode console source
+ * (packages/console/app/src/routes/zen/go/v1/usage.ts):
+ * `{ usage: { rolling: { status, percent, resetsAt }, weekly: {...}, monthly } }`.
+ * `percent` is already a 0-100 usage share on the same axis as the board's
+ * bars, so it passes through without ratio conversion; monthly has no board
+ * column and is deliberately not surfaced.
+ */
+function parseOpenCodeUsage(payload) {
+  const u = payload?.usage;
+  return {
+    fiveHourPct: numOf(u?.rolling?.percent),
+    weeklyPct: numOf(u?.weekly?.percent),
+  };
+}
+
 module.exports = {
   FIVE_HOUR_SPEC,
   WEEKLY_SPEC,
@@ -202,4 +302,6 @@ module.exports = {
   getPath,
   detectLimitPct,
   normalizeBalance,
+  parseWindowedUsage,
+  parseOpenCodeUsage,
 };

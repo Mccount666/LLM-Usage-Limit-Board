@@ -187,6 +187,84 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.match(r.error, /找不到/);
   });
 
+  console.log('--- usage:fetch / Kimi Code 专用分支（host api.kimi.com）---');
+  await t('/usages 命中：解析 5h + 周，Bearer 为 sk-kimi key，UA 为 KimiCLI', async () => {
+    await save([{ id: 'kimi1', name: 'Kimi', baseUrl: 'https://api.kimi.com/coding/v1', mode: 'plan', apiKey: 'sk-kimi-test' }]);
+    setRoutes([{ match: '/usages', status: 200, body: { data: [
+      { model_name: 'kimi-k2', window: { duration: 300, timeUnit: 'MINUTE' }, limit: 100, used: 25 },
+      { model_name: 'all', limit: 7000, used: 700 },
+    ] } }]);
+    const r = await fetchUsage('kimi1');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.usage.fiveHourPct, 25);
+    assert.strictEqual(r.usage.weeklyPct, 10);
+    const hit = calls.find((c) => c.url.includes('/usages'));
+    assert.ok(hit, 'no /usages call recorded');
+    assert.strictEqual(hit.headers.Authorization, 'Bearer sk-kimi-test');
+    assert.strictEqual(hit.headers['User-Agent'], 'KimiCLI/1.6');
+    assert.ok(calls.every((c) => !c.url.includes('/api/user/self')), 'one-api candidates must not be probed for kimi host');
+  });
+  await t('/usages 404 时并发回落 /usage（先到先用）', async () => {
+    await save([{ id: 'kimi2', name: 'Kimi2', baseUrl: 'https://api.kimi.com/coding/v1', mode: 'plan', apiKey: 'sk-kimi-test' }]);
+    setRoutes([
+      { match: '/usages', status: 404, body: {} },
+      { match: '/coding/v1/usage', status: 200, body: { data: [
+        { window: { duration: 5, timeUnit: 'HOUR' }, limit: 100, used: 30 },
+        { model_name: 'all', limit: 100, used: 10 },
+      ] } },
+    ]);
+    const r = await fetchUsage('kimi2');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.usage.fiveHourPct, 30);
+    assert.strictEqual(r.usage.weeklyPct, 10);
+  });
+  await t('Base URL 漏了 /coding/v1 时，404 诊断里给出正确填法', async () => {
+    await save([{ id: 'kimi3', name: 'Kimi3', baseUrl: 'https://api.kimi.com', mode: 'plan', apiKey: 'sk-kimi-test' }]);
+    setRoutes([{ match: 'api.kimi.com', status: 404, body: {} }]);
+    const r = await fetchUsage('kimi3');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /https:\/\/api\.kimi\.com\/coding\/v1/);
+  });
+
+  console.log('--- usage:fetch / OpenCode Go 专用分支（host opencode.ai）---');
+  await t('/usage 命中：rolling/weekly percent 直读', async () => {
+    await save([{ id: 'oc1', name: 'OpenCode Go', baseUrl: 'https://opencode.ai/zen/go/v1', mode: 'plan', apiKey: 'sk-oc-test' }]);
+    setRoutes([{ match: '/usage', status: 200, body: { usage: {
+      rolling: { status: 'ok', percent: 19.5, resetsAt: '2026-09-12T00:00:00Z' },
+      weekly: { status: 'ok', percent: 7, resetsAt: '2026-09-15T00:00:00Z' },
+      monthly: { status: 'ok', percent: 3, resetsAt: '2026-10-01T00:00:00Z' },
+    } } }]);
+    const r = await fetchUsage('oc1');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.usage.fiveHourPct, 19.5);
+    assert.strictEqual(r.usage.weeklyPct, 7);
+    const hit = calls.find((c) => c.url.includes('/usage'));
+    assert.ok(hit, 'no /usage call recorded');
+    assert.strictEqual(hit.headers.Authorization, 'Bearer sk-oc-test');
+  });
+  await t('401 AuthError：认证错误信息带上服务商原话', async () => {
+    await save([{ id: 'oc2', name: 'OpenCode Go 2', baseUrl: 'https://opencode.ai/zen/go/v1', mode: 'plan', apiKey: 'sk-oc-bad' }]);
+    setRoutes([{ match: '/usage', status: 401, body: { type: 'error', error: { type: 'AuthError', message: 'Unauthorized' } } }]);
+    const r = await fetchUsage('oc2');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /API Key 无效或权限不足（HTTP 401）/);
+    assert.match(r.error, /Unauthorized/);
+  });
+  await t('Base URL 漏了 /zen/go/v1 时，404 诊断里给出正确填法', async () => {
+    await save([{ id: 'oc3', name: 'OpenCode Go 3', baseUrl: 'https://opencode.ai', mode: 'plan', apiKey: 'sk-oc-test' }]);
+    setRoutes([{ match: 'opencode.ai', status: 404, body: {} }]);
+    const r = await fetchUsage('oc3');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /https:\/\/opencode\.ai\/zen\/go\/v1/);
+  });
+
+  // save() 是整表替换——把套件开头种下的 p1/p2 原样恢复，后面的用例才看得到
+  // 同样的两条订阅（id 与 key 必须逐字相同）。
+  await save([
+    { id: 'p1', name: 'Plan A', baseUrl: 'https://gw.example.com', mode: 'plan', apiKey: 'sk-plan' },
+    { id: 'p2', name: 'Bal B', baseUrl: 'https://gw.example.com', mode: 'balance', apiKey: 'sk-bal' },
+  ]);
+
   console.log('--- usage:fetch / balance（并发探测 P3-C）---');
   await t('余额解析成功', async () => {
     setRoutes([
