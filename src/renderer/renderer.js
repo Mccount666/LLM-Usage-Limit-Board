@@ -178,8 +178,10 @@ function bindUi() {
 
   // Window controls: a failed IPC here is not actionable for the user, but it
   // must not become an unhandled rejection (第五轮复核 P1-C).
+  // 「-」键不再最小化到任务栏——直接收缩成迷你状态条（用户指定：横条不应只有
+  // 保存成功一条路）；× 仍是隐藏到托盘。
   els.minimizeBtn.addEventListener('click', () => {
-    window.api.minimizeWindow().catch(() => {});
+    applyDisplayMode('mini');
   });
   els.hideBtn.addEventListener('click', () => {
     window.api.hideWindow().catch(() => {});

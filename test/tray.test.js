@@ -130,13 +130,15 @@ const widgetWindow = () => BrowserWindow.getAllWindows()[0];
   await wait(400);
   ck('菜单「显示看板」也能恢复窗口', win.isVisible() === true);
 
-  // minimize → tray click must un-minimize, not just show
-  await created.handlers['window:minimize'](null);
+  // 「-」键/迷你条形态（feedback §28.九）：窗口收缩为穿透小条后，托盘点击
+  // 必须能回到可见的配置面板——穿透条自己不可点，托盘是唯一回程。
+  // （window:minimize 通道已随「-」键改造移除，最小化到任务栏的旧路径退场。）
+  await created.handlers['window:set-display-mode']('mini', 640);
   await wait(300);
-  ck('window:minimize 后窗口最小化', win.isMinimized() === true);
+  ck('set-display-mode mini 后窗口仍可见（已变小条）', win.isVisible() === true);
   tray.emit('click');
   await wait(400);
-  ck('托盘点击后解除最小化并可见', win.isMinimized() === false && win.isVisible() === true);
+  ck('托盘点击从迷你条回到配置面板', win.isVisible() === true && win.isMinimized() === false);
 
   console.log('\ntray.test: ' + pass + ' passed, ' + failures.length + ' failed');
   if (failures.length) console.log('Failed:\n- ' + failures.join('\n- '));

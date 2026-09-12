@@ -289,6 +289,8 @@ app.whenReady().then(async () => {
         const rowsAfter = [...document.querySelectorAll('.usage-item')].map((r) => r.dataset.id);
         const el = document.getElementById('saveError');
         document.getElementById('minimizeBtn').click();
+        const miniSwitched = document.body.classList.contains('mini');
+        const barVisible = !document.getElementById('miniBar').classList.contains('hidden');
         document.getElementById('hideBtn').click();
         await wait(200);
         return JSON.stringify({
@@ -298,6 +300,8 @@ app.whenReady().then(async () => {
           pctsAfterRollback: pcts(),
           errorHidden: el.classList.contains('hidden'),
           errorText: el.textContent,
+          miniSwitched,
+          barVisible,
         });
       })()`),
     );
@@ -308,6 +312,8 @@ app.whenReady().then(async () => {
     // rolled-back row loses its readings ("--") until the next poll.
     ck('回滚后读数原样保留（缓存一并恢复，不退回 --）', JSON.stringify(res.pctsAfterRollback) === JSON.stringify(res.pctsBefore), JSON.stringify(res.pctsAfterRollback));
     ck('窗口按钮 reject 不产生未处理 rejection', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
+    // 「-」键收缩为迷你状态条（不再最小化到任务栏）——反馈 §28.九。
+    ck('「-」键收缩为迷你条且迷你条可见', res.miniSwitched === true && res.barVisible === true, JSON.stringify({ miniSwitched: res.miniSwitched, barVisible: res.barVisible }));
   } else if (testCase === 'firstrun') {
     // Privacy notice: shown on first launch, remembered after dismissal.
     const before = JSON.parse(

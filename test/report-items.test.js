@@ -60,8 +60,9 @@ t('P0-3 无 shell:openExternal；shell 未 require', () => {
 t('P0-3b preload 每个通道都有 main handler', () => {
   const chans = [...PRE.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map((m) => m[1]);
   const handlers = [...MAIN.matchAll(/ipcMain\.handle\('([^']+)'/g)].map((m) => m[1]);
-  // 第八通道 window:set-display-mode：双态窗口（feedback §28）。
-  assert.strictEqual(chans.length, 8, 'IPC surface changed — update this inventory');
+  // 第七通道 window:set-display-mode：双态窗口（feedback §28）；window:minimize
+  // 已移除（「-」键改为收缩迷你条，feedback §28.九）。
+  assert.strictEqual(chans.length, 7, 'IPC surface changed — update this inventory');
   for (const h of handlers) assert.ok(chans.includes(h), 'handler with no caller: ' + h);
   for (const c of chans) assert.ok(handlers.includes(c), 'no handler for ' + c);
 });
@@ -118,10 +119,9 @@ t('P2-3b 保存失败反馈到 UI', () => {
   matches(REND, /function showSaveError\(msg\)/);
   matches(HTML, /id="saveError"/);
 });
-t('第五轮 P1-C 全部 8 个 IPC invoke 调用点都有兜底（另有 1 个事件订阅 onUiMode）', () => {
+t('第五轮 P1-C 全部 7 个 IPC invoke 调用点都有兜底（另有 1 个事件订阅 onUiMode）', () => {
   matches(REND, /loadProviders\(\)\.catch\(/);
   matches(REND, /getSecurityStatus\(\)\.catch\(/);
-  matches(REND, /minimizeWindow\(\)\.catch\(\(\) => \{\}\)/);
   matches(REND, /hideWindow\(\)\.catch\(\(\) => \{\}\)/);
   matches(REND, /setDisplayMode\('mini', w\)\.catch\(\(\) => \{\}\)/);
   matches(REND, /setDisplayMode\('config'\)\.catch\(\(\) => \{\}\)/);
@@ -131,7 +131,7 @@ t('第五轮 P1-C 全部 8 个 IPC invoke 调用点都有兜底（另有 1 个�
   const sites = [...REND.matchAll(/window\.api\.(\w+)\(/g)].map((m) => m[1]);
   assert.deepStrictEqual(
     [...new Set(sites)].sort(),
-    ['deleteProvider', 'fetchUsage', 'getSecurityStatus', 'hideWindow', 'loadProviders', 'minimizeWindow', 'onUiMode', 'saveProviders', 'setDisplayMode'],
+    ['deleteProvider', 'fetchUsage', 'getSecurityStatus', 'hideWindow', 'loadProviders', 'onUiMode', 'saveProviders', 'setDisplayMode'],
     'IPC surface changed — re-check the fallback inventory',
   );
 });

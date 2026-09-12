@@ -132,8 +132,8 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
 
 (async () => {
   console.log('--- ipc 注册面 ---');
-  await t('8 个通道全部注册', () => {
-    for (const ch of ['providers:load', 'providers:save', 'providers:delete', 'usage:fetch', 'security:status', 'window:minimize', 'window:hide', 'window:set-display-mode']) {
+  await t('7 个通道全部注册（window:minimize 已随「-」键改造移除）', () => {
+    for (const ch of ['providers:load', 'providers:save', 'providers:delete', 'usage:fetch', 'security:status', 'window:hide', 'window:set-display-mode']) {
       assert.ok(hasHandler(ch), 'missing handler ' + ch);
     }
   });
@@ -310,6 +310,13 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.ok(Math.abs(r.usage.amount - 110.5) < 1e-9, 'amount=' + r.usage.amount);
     assert.strictEqual(r.usage.currency, 'CNY');
   });
+  await t('Base URL 带 /v1 时同样命中（双路径变体并发探测）', async () => {
+    await save([{ id: 'ds2', name: 'DeepSeek2', baseUrl: 'https://api.deepseek.com/v1', mode: 'balance', apiKey: 'sk-ds-test' }]);
+    setRoutes([{ match: '/v1/user/balance', status: 200, body: { balance: [{ currency: 'CNY', total_balance: '88.00' }] } }]);
+    const r = await fetchUsage('ds2');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.amount - 88) < 1e-9, 'amount=' + r.usage.amount);
+  });
 
   console.log('--- usage:fetch / MiniMax Token Plan（host minimaxi.com）---');
   await t('/coding_plan/remains 命中：usage_count 语义为剩余 — 1500/1200 → 20%，周侧灰', async () => {
@@ -341,27 +348,6 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.strictEqual(calls.length, 0, 'plan guard answers directly, zero probes');
   });
 
-  console.log('--- window:set-display-mode（双态窗口）---');
-  await t('mini：按渲染层量得的宽度改窗 + 鼠标穿透开启', async () => {
-    const r = await handlers['window:set-display-mode'](null, 'mini', 640);
-    assert.strictEqual(r.ok, true);
-    const w = lastWindow();
-    assert.strictEqual(w._bounds.width, 640);
-    assert.strictEqual(w._bounds.height, 44);
-    assert.strictEqual(w._ignoreMouse, true);
-  });
-  await t('mini 宽度超屏被钳制', async () => {
-    await handlers['window:set-display-mode'](null, 'mini', 99999);
-    assert.strictEqual(lastWindow()._bounds.width, 1896);
-  });
-  await t('config：恢复 420x520 + 穿透关闭 + 显示聚焦', async () => {
-    await handlers['window:set-display-mode'](null, 'config');
-    const w = lastWindow();
-    assert.strictEqual(w._bounds.width, 420);
-    assert.strictEqual(w._bounds.height, 520);
-    assert.strictEqual(w._ignoreMouse, false);
-    assert.ok(w.calls.includes('show') && w.calls.includes('focus'));
-  });
 
   console.log('--- usage:fetch / Moonshot 开放平台余额（host api.moonshot.cn）---');
   await t('/users/me/balance 命中：data 信封里的 balance 解析', async () => {
@@ -477,16 +463,14 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.ok(lastWindow().calls.includes('hide'), 'hide() not called');
     assert.strictEqual(trayCalls.length, before + 1, 'tray should be created on first hide');
   });
-  await t('再次最小化不会重复创建托盘', async () => {
-    const before = trayCalls.length;
-    await handlers['window:minimize'](null);
-    assert.ok(lastWindow().calls.includes('minimize'), 'minimize() not called');
-    assert.strictEqual(trayCalls.length, before, 'tray must be created once');
+  await t('window:minimize 通道已移除（「-」键改为收缩迷你条）', () => {
+    assert.ok(!handlers['window:minimize'], 'window:minimize should no longer be registered');
   });
-  await t('托盘菜单提供「显示看板」与「退出」', () => {
+  await t('托盘菜单提供「配置面板」「迷你状态条」「显示看板」与「退出」', () => {
     const labels = trayCalls[0].menu.map((m) => m.label).filter(Boolean);
-    assert.ok(labels.includes('显示看板'), JSON.stringify(labels));
-    assert.ok(labels.includes('退出'), JSON.stringify(labels));
+    for (const want of ['配置面板', '迷你状态条', '显示看板', '退出']) {
+      assert.ok(labels.includes(want), JSON.stringify(labels));
+    }
   });
   // The tray menu is the ONLY restore path now (the unused window:show IPC
   // channel was removed to shrink the surface), so it must do the full job.
@@ -514,6 +498,29 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
   });
   await t('已移除的 window:show 通道确实不存在', () => {
     assert.ok(!handlers['window:show'], 'window:show should no longer be registered');
+  });
+
+  console.log('--- window:set-display-mode（双态窗口）---');
+  await t('mini：按渲染层量得的宽度改窗 + 鼠标穿透开启（托盘在册——唯一回程）', async () => {
+    const r = await handlers['window:set-display-mode'](null, 'mini', 640);
+    assert.strictEqual(r.ok, true);
+    const w = lastWindow();
+    assert.strictEqual(w._bounds.width, 640);
+    assert.strictEqual(w._bounds.height, 44);
+    assert.strictEqual(w._ignoreMouse, true);
+    assert.ok(trayCalls.length >= 1, 'tray must exist for the click-through bar');
+  });
+  await t('mini 宽度超屏被钳制', async () => {
+    await handlers['window:set-display-mode'](null, 'mini', 99999);
+    assert.strictEqual(lastWindow()._bounds.width, 1896);
+  });
+  await t('config：恢复 420x520 + 穿透关闭 + 显示聚焦', async () => {
+    await handlers['window:set-display-mode'](null, 'config');
+    const w = lastWindow();
+    assert.strictEqual(w._bounds.width, 420);
+    assert.strictEqual(w._bounds.height, 520);
+    assert.strictEqual(w._ignoreMouse, false);
+    assert.ok(w.calls.includes('show') && w.calls.includes('focus'));
   });
 
   console.log('--- 反例测试（第五轮复核 P1-A / P1-B）---');

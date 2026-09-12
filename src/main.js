@@ -150,6 +150,9 @@ let tray = null;
 // 因此回到配置面板的唯一入口是托盘。
 function applyWindowDisplayMode(mode, width) {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
+  // 迷你条鼠标完全穿透，托盘是它唯一的回程——切态时惰性确保存在，
+  // 否则「启动即 mini」的用户会被锁在穿透条里出不来。
+  ensureTray();
   const wa = screen.getPrimaryDisplay().workArea;
   if (mode === 'mini') {
     const w = Math.max(200, Math.min(Number(width) || 560, wa.width - 24));
@@ -214,16 +217,13 @@ function ensureTray() {
   }
 }
 
-ipcMain.handle('window:minimize', () => {
-  if (!widgetWindow || widgetWindow.isDestroyed()) return;
-  widgetWindow.minimize();
-  ensureTray();
-});
 ipcMain.handle('window:hide', () => {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
   widgetWindow.hide();
   ensureTray();
 });
+// window:minimize 已移除（第二十八部分§28.九）：「-」键改为收缩迷你状态条，
+// 最小化到任务栏的旧路径随之退场，缩小 IPC 面。
 ipcMain.handle('window:set-display-mode', (_evt, mode, width) => {
   applyWindowDisplayMode(mode === 'mini' ? 'mini' : 'config', width);
   return { ok: true };
@@ -614,9 +614,11 @@ async function fetchOpenRouterBalance(provider) {
   return { ok: true, usage: { mode: 'balance', amount: parsed.amount, currency: parsed.currency, field: 'credits' } };
 }
 
-// DeepSeek 按量余额：{base}/user/balance（base = https://api.deepseek.com）→
-// { balance: [{ currency, total_balance, … }] }。取 CNY 行的 total_balance。
-const DEEPSEEK_BALANCE_PATHS = ['/user/balance'];
+// DeepSeek 按量余额：{base}/user/balance（base = https://api.deepseek.com）。
+// 官方文档同时教用户填 /v1（OpenAI 兼容形）——两个路径变体都实测存活
+// （哑密钥均 401），并发探测先到先用，填哪种都能命中。
+// → { balance: [{ currency, total_balance, … }] }。取 CNY 行的 total_balance。
+const DEEPSEEK_BALANCE_PATHS = ['/user/balance', '/v1/user/balance'];
 async function fetchDeepSeekBalance(provider) {
   const diag = newProbeDiag();
   const headers = { Authorization: `Bearer ${provider.apiKey}` };
