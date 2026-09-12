@@ -368,6 +368,50 @@ function parseMiniMaxRemains(payload) {
   return null;
 }
 
+/**
+ * 智谱 GLM `/api/monitor/usage/quota/limit` payload:
+ * `{ success, code, msg, data: { level, limits: [ { type: 'TIME_LIMIT' |
+ * 'TOKENS_LIMIT', unit, number, percentage, nextResetTime } ] } }`.
+ * percentage is a used-share 0-100. TIME_LIMIT (按类型字面义) maps to the 5h
+ * bar; TOKENS_LIMIT maps to the second bar — community tools disagree on its
+ * period label (cc-switch treats it as THE usage; coding-plan-monitor calls
+ * it the window), so the README/feedback carry that caveat explicitly.
+ * Auth failure arrives as HTTP 200 + success:false → data.data missing → null.
+ */
+function parseZhipuQuota(payload) {
+  const limits = Array.isArray(payload?.data?.limits) ? payload.data.limits : null;
+  if (!limits) return null;
+  let fiveHour = null;
+  let tokens = null;
+  for (const it of limits) {
+    if (!it || typeof it !== 'object') continue;
+    const pct = numOf(it.percentage);
+    if (pct == null) continue;
+    if (it.type === 'TIME_LIMIT' && fiveHour == null) fiveHour = pct;
+    if (it.type === 'TOKENS_LIMIT' && tokens == null) tokens = pct;
+  }
+  if (fiveHour == null && tokens == null) return null;
+  return { fiveHourPct: fiveHour, weeklyPct: tokens };
+}
+
+/**
+ * GitHub Copilot `/copilot_internal/user` payload (undocumented internal
+ * endpoint): `{ quota_snapshots: { chat/completions/premium_interactions:
+ * { percent_remaining, entitlement, unlimited }, … }, … }`. The scarce quota
+ * on paid plans is premium_interactions (monthly premium requests); its value
+ * is REMAINING percent → used = 100 - remaining. `unlimited: true` (chat/
+ * completions on most plans) means "no data to show" → null.
+ */
+function parseCopilotQuota(payload) {
+  const snaps = payload?.quota_snapshots;
+  const premium = snaps?.premium_interactions;
+  if (!premium || typeof premium !== 'object') return null;
+  if (premium.unlimited === true) return null;
+  const remaining = numOf(premium.percent_remaining);
+  if (remaining == null || remaining < 0 || remaining > 100) return null;
+  return 100 - remaining;
+}
+
 module.exports = {
   FIVE_HOUR_SPEC,
   WEEKLY_SPEC,
@@ -383,4 +427,6 @@ module.exports = {
   parseOpenRouterCredits,
   parseDeepSeekBalance,
   parseMiniMaxRemains,
+  parseZhipuQuota,
+  parseCopilotQuota,
 };

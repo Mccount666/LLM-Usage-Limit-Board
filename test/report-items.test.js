@@ -286,8 +286,8 @@ t('问题4 setInterval 在 await pollAll 之前', () => {
 });
 t('P3-A 行形状由 usage.mode 决定', () => {
   matches(REND, /function rowMode\(p\)/);
-  matches(REND, /if \(row\.dataset\.mode !== mode\)/);
-  matches(REND, /row\.innerHTML = buildRowHtml\(p, mode\)/);
+  matches(REND, /if \(row\.dataset\.mode !== mode \|\| row\.dataset\.secondLabel !== secondLabel\)/);
+  matches(REND, /row\.innerHTML = buildRowHtml\(p, mode, secondLabel\)/);
 });
 t('P3-B providers:save 校验 id 字符串且唯一', () => {
   matches(MAIN, /typeof rawId !== 'string' \|\| rawId\.length === 0/);
@@ -331,7 +331,7 @@ t('P3-C 候选先到先用 + 记住可用路径', () => {
   // branches add seven named kinds (kimi/opencode/moonshot from feedback §27,
   // minimax/openrouter/deepseek/stepfun from §28) — now nine call sites, all
   // still the same first-to-arrive mechanism.
-  assert.strictEqual((MAIN.match(/probeCandidates\(provider, '/g) || []).length, 9);
+  assert.strictEqual((MAIN.match(/probeCandidates\(provider, '/g) || []).length, 12);
   matches(MAIN, /probeCandidates\(provider, 'userinfo'/);
   matches(MAIN, /probeCandidates\(provider, 'balance'/);
   matches(MAIN, /probeCandidates\(provider, 'kimi-usage'/);
@@ -341,6 +341,9 @@ t('P3-C 候选先到先用 + 记住可用路径', () => {
   matches(MAIN, /probeCandidates\(provider, 'openrouter-credits'/);
   matches(MAIN, /probeCandidates\(provider, 'deepseek-balance'/);
   matches(MAIN, /probeCandidates\(provider, 'stepfun-balance'/);
+  matches(MAIN, /probeCandidates\(provider, 'zhipu-quota'/);
+  matches(MAIN, /probeCandidates\(provider, 'cherryin-sub'/);
+  matches(MAIN, /probeCandidates\(provider, 'cherryin-usage'/);
 });
 t('第五轮 P1-B accept 严格且按调用方区分', () => {
   matches(MAIN, /function hasPlanLimits\(/);

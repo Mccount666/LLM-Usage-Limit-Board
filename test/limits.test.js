@@ -22,6 +22,8 @@ const {
   parseOpenRouterCredits,
   parseDeepSeekBalance,
   parseMiniMaxRemains,
+  parseZhipuQuota,
+  parseCopilotQuota,
 } = require('../src/lib/limits');
 
 let pass = 0;
@@ -230,6 +232,41 @@ t('OpenCode Go：rate-limited 状态不影响 percent 读取；字符串数字�
 t('OpenCode Go：坏形状 -> 双 null', () => {
   assert.deepStrictEqual(parseOpenCodeUsage({}), { fiveHourPct: null, weeklyPct: null });
   assert.deepStrictEqual(parseOpenCodeUsage({ usage: { rolling: { percent: [] } } }), { fiveHourPct: null, weeklyPct: null });
+});
+
+console.log('--- 智谱 GLM quota（TIME_LIMIT / TOKENS_LIMIT）---');
+t('GLM：TIME_LIMIT → 5h 列、TOKENS_LIMIT → 第二列（percentage 直读 0-100）', () => {
+  const r = parseZhipuQuota({ success: true, data: { level: 'pro', limits: [
+    { type: 'TIME_LIMIT', percentage: 12.5, unit: 1, number: 600, nextResetTime: 1760000000000 },
+    { type: 'TOKENS_LIMIT', percentage: 34, unit: 1, number: 100000, nextResetTime: 1761000000000 },
+  ] } });
+  assert.ok(Math.abs(r.fiveHourPct - 12.5) < 1e-9);
+  assert.ok(Math.abs(r.weeklyPct - 34) < 1e-9);
+});
+t('GLM：只缺一类窗口时另一类照常，全缺 → null', () => {
+  const r = parseZhipuQuota({ success: true, data: { limits: [{ type: 'TOKENS_LIMIT', percentage: 5 }] } });
+  assert.strictEqual(r.fiveHourPct, null);
+  assert.strictEqual(r.weeklyPct, 5);
+  assert.strictEqual(parseZhipuQuota({ success: true, data: { limits: [] } }), null);
+});
+t('GLM：鉴权失败体（HTTP 200 + success:false）→ null，accept 必拒', () => {
+  assert.strictEqual(parseZhipuQuota({ code: 401, msg: '令牌已过期或验证不正确', success: false }), null);
+  assert.strictEqual(parseZhipuQuota({}), null);
+});
+
+console.log('--- GitHub Copilot premium 快照（percent_remaining 反推）---');
+t('Copilot：premium_interactions 剩余 80 → 已用 20', () => {
+  const r = parseCopilotQuota({ quota_snapshots: {
+    chat: { percent_remaining: 100, unlimited: true },
+    premium_interactions: { percent_remaining: 80, entitlement: 300 },
+  } });
+  assert.ok(Math.abs(r - 20) < 1e-9);
+});
+t('Copilot：unlimited / 缺快照 / 坏值 → null', () => {
+  assert.strictEqual(parseCopilotQuota({ quota_snapshots: { premium_interactions: { percent_remaining: 100, unlimited: true } } }), null);
+  assert.strictEqual(parseCopilotQuota({ quota_snapshots: {} }), null);
+  assert.strictEqual(parseCopilotQuota({}), null);
+  assert.strictEqual(parseCopilotQuota({ quota_snapshots: { premium_interactions: { percent_remaining: 180 } } }), null);
 });
 
 console.log('--- 按量余额 / Token Plan（OpenRouter / DeepSeek / MiniMax）---');

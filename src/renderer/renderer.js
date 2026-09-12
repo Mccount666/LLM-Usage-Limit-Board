@@ -439,7 +439,7 @@ function renderMiniBar() {
     } else {
       const parts = [];
       let worst = 'ok';
-      for (const [label, pct] of [['5h', last.usage.fiveHourPct], ['周', last.usage.weeklyPct]]) {
+      for (const [label, pct] of [['5h', last.usage.fiveHourPct], [last.usage.secondLabel || '周', last.usage.weeklyPct]]) {
         if (!Number.isFinite(pct)) {
           parts.push(`${label} --`);
           continue;
@@ -500,7 +500,9 @@ function renderUsage() {
     li.className = 'usage-item';
     li.dataset.id = p.id; // property assignment: never parsed as HTML
     li.dataset.mode = rowMode(p);
-    li.innerHTML = buildRowHtml(p, rowMode(p));
+    const cached = state.lastUsage.get(p.id);
+    li.dataset.secondLabel = String(cached?.usage?.secondLabel || '');
+    li.innerHTML = buildRowHtml(p, rowMode(p), cached?.usage?.secondLabel);
     els.list.appendChild(li);
   }
   // A full rebuild starts every row at "--". Re-apply the cache so adding or
@@ -513,7 +515,7 @@ function renderUsage() {
   }
 }
 
-function buildRowHtml(p, mode) {
+function buildRowHtml(p, mode, secondLabel) {
   const name = escapeHtml(String(p?.name ?? ''));
   if (mode === 'balance') {
     return `
@@ -536,7 +538,7 @@ function buildRowHtml(p, mode) {
         <span class="bar-pct">--</span>
       </div>
       <div class="bar-row">
-        <span>7d</span>
+        <span>${escapeHtml(String(secondLabel || '7d'))}</span>
         <div class="bar"><div class="bar-fill ok"></div></div>
         <span class="bar-pct">--</span>
       </div>
@@ -580,10 +582,14 @@ function applyUsageRow(id, usage, error) {
   // provider configured as plan but answering in balance mode cannot end up
   // with two bars that only ever update one of them.
   const mode = usage.mode === 'balance' ? 'balance' : 'plan';
-  if (row.dataset.mode !== mode) {
+  const secondLabel = String(usage.secondLabel || '');
+  // secondLabel 变化同样要重建行：GLM 的第二列是 "Token"、Copilot 是 "月"，
+  // 沿用默认 "7d" 会把服务商自己的窗口语义标错。
+  if (row.dataset.mode !== mode || row.dataset.secondLabel !== secondLabel) {
     const p = state.providers.find((x) => x.id === id);
     row.dataset.mode = mode;
-    row.innerHTML = buildRowHtml(p, mode);
+    row.dataset.secondLabel = secondLabel;
+    row.innerHTML = buildRowHtml(p, mode, secondLabel);
   }
 
   const fills = row.querySelectorAll('.bar-fill');

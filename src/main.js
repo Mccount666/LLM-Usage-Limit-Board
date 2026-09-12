@@ -22,6 +22,8 @@ const {
   parseOpenRouterCredits,
   parseDeepSeekBalance,
   parseMiniMaxRemains,
+  parseZhipuQuota,
+  parseCopilotQuota,
   FIVE_HOUR_SPEC,
   WEEKLY_SPEC,
 } = require('./lib/limits');
@@ -478,6 +480,26 @@ async function fetchPlanUsage(provider) {
       host === 'minimax.io' || host.endsWith('.minimax.io')) {
     return fetchMiniMaxPlanUsage(provider);
   }
+  // GitHub Copilot：两步换票——GET /copilot_internal/v2/token（OAuth token，
+  // PAT 不受支持）→ {token} → GET /copilot_internal/user → quota_snapshots。
+  // Premium 请求（月度重置）是付费计划的稀缺额度：percent_remaining 反推已用。
+  if (host === 'github.com' || host.endsWith('.github.com')) {
+    return fetchCopilotPlanUsage(provider);
+  }
+  // 火山方舟 Coding Plan：无公开 Key 直查接口（诚实拒答，零探测）。
+  if (host === 'volces.com' || host.endsWith('.volces.com') ||
+      host === 'volcengine.com' || host.endsWith('.volcengine.com')) {
+    return guardVolcanoPlan();
+  }
+  // 智谱 GLM Coding Plan：GET {origin}/api/monitor/usage/quota/limit。
+  // 智谱鉴权风格：裸 Key 直接放 Authorization（无 Bearer 前缀）；
+  // 鉴权失败是 HTTP 200 + {success:false}（不在状态码里），accept 必须查标志。
+  // 用户常填模型请求端点（/api/coding/paas/v4、/api/anthropic）——归一化到
+  // origin 后统一落到查询端点（同 host）。
+  if (host === 'bigmodel.cn' || host.endsWith('.bigmodel.cn') ||
+      host === 'z.ai' || host.endsWith('.z.ai')) {
+    return fetchZhipuPlanUsage(provider);
+  }
   // Step Plan（阶跃星辰订阅制）与 MiniMax 同为 5h+周双窗口，但官方至今未开放
   // 查询接口（cc-switch #4454 在等）——按量余额请走「余额」模式。
   if (host === 'stepfun.com' || host.endsWith('.stepfun.com') ||
@@ -693,6 +715,135 @@ async function fetchMiniMaxPlanUsage(provider) {
       weeklyPct: null, // 响应无周侧——留灰，不伪造
     },
   };
+}
+
+// 智谱 GLM Coding Plan 用量：{origin}/api/monitor/usage/quota/limit
+// （端点与形状已对 cc-switch Discussion #1038 与 coding-plan-monitor 核实）。
+// TIME_LIMIT → 5h 列；TOKENS_LIMIT → 第二列（其周期社区标注不一，README 有
+// 如实说明）。鉴权失败 = HTTP 200 + success:false，由 accept 的 null 拒绝。
+const ZHIPU_QUOTA_PATHS = ['/api/monitor/usage/quota/limit'];
+async function fetchZhipuPlanUsage(providerIn) {
+  const diag = newProbeDiag();
+  const headers = {
+    Authorization: String(providerIn.apiKey || ''),
+    'Content-Type': 'application/json',
+  };
+  const rawBase = providerIn.baseUrl.replace(/\/+$/, '');
+  let origin = rawBase;
+  try {
+    origin = new URL(rawBase).origin;
+  } catch {
+    origin = rawBase; // keep the raw base; the probe will fail honestly
+  }
+  // 就地换名，保证 probeCandidates 调用点形参同形（P3-C 不变量）。
+  const provider = origin === rawBase ? providerIn : { ...providerIn, baseUrl: origin };
+  let parsed = null;
+  const res = await probeCandidates(provider, 'zhipu-quota', ZHIPU_QUOTA_PATHS, headers, (r) => {
+    parsed = parseZhipuQuota(r.data);
+    return parsed != null;
+  }, diag);
+  if (!res) {
+    const msg = explainProbeFailure(diag, provider, 'plan');
+    const hint = /404|没有提供可用的用量接口|找不到/.test(msg)
+      ? '。GLM Coding Plan 的 Base URL 填 https://open.bigmodel.cn（Z.ai 填 https://api.z.ai），填模型端点会自动归一' : '';
+    return { ok: false, error: msg + hint };
+  }
+  const p = parseZhipuQuota(res.data);
+  return {
+    ok: true,
+    usage: {
+      mode: 'plan',
+      fiveHourPct: p.fiveHourPct == null ? null : clampPct(p.fiveHourPct),
+      weeklyPct: p.weeklyPct == null ? null : clampPct(p.weeklyPct),
+      secondLabel: 'Token', // TOKENS_LIMIT 的周期官方未明示——列标签如实标注
+    },
+  };
+}
+
+// CherryIN（Cherry Studio 官方聚合网关，New API 栈）按量余额：OpenAI 式账单
+// 对——GET /v1/dashboard/billing/subscription（hard_limit_usd）与
+// /v1/dashboard/billing/usage（total_usage，按 one-api 惯例为美分）。
+// 可用 = hard_limit_usd - total_usage / 100。换算若与站点实测不符，错误横幅
+// 会引导回传 JSON 适配。
+const CHERRYIN_SUB_PATH = '/v1/dashboard/billing/subscription';
+const CHERRYIN_USAGE_PATH = '/v1/dashboard/billing/usage';
+async function fetchCherryInBalance(provider) {
+  const diag = newProbeDiag();
+  const headers = { Authorization: `Bearer ${provider.apiKey}` };
+  const sub = await probeCandidates(provider, 'cherryin-sub', [CHERRYIN_SUB_PATH], headers, (r) => {
+    return numOf(r.data?.hard_limit_usd ?? r.data?.system_hard_limit_usd) != null;
+  }, diag);
+  if (!sub) {
+    const msg = explainProbeFailure(diag, provider, 'balance');
+    const hint = /404|没有提供可用的用量接口/.test(msg)
+      ? '。CherryIN 的 Base URL 填 https://open.cherryin.ai' : '';
+    return { ok: false, error: msg + hint };
+  }
+  const limit = numOf(sub.data?.hard_limit_usd ?? sub.data?.system_hard_limit_usd);
+  const usage = await probeCandidates(provider, 'cherryin-usage', [CHERRYIN_USAGE_PATH], headers, (r) => {
+    return numOf(r.data?.total_usage) != null;
+  }, diag);
+  if (!usage) {
+    // 上限拿到了但用量查询失败——按 0 已用会谎报余额（最危险方向），如实失败。
+    return { ok: false, error: 'CherryIN 订阅上限已取到，但用量查询失败（HTTP 错误），请稍后重试；若持续失败请把 /v1/dashboard/billing/usage 的返回 JSON 发给我适配' };
+  }
+  const used = numOf(usage.data?.total_usage) ?? 0;
+  const amount = limit - used / 100; // one-api 惯例：total_usage 为美分
+  return {
+    ok: true,
+    usage: { mode: 'balance', amount: clampAmount(amount), currency: 'USD', field: 'billing' },
+  };
+}
+
+function clampAmount(n) {
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
+// GitHub Copilot 用量（两步换票，均在 api.github.com）：
+// ① GET /copilot_internal/v2/token —— Authorization: Bearer <GitHub OAuth
+//    token（gho_…）>；PAT（ghp_/github_pat_）被 GitHub 拒绝，提前给出诚实错误。
+// ② GET /copilot_internal/user —— Bearer <上一步的 copilot token> →
+//    quota_snapshots.premium_interactions.percent_remaining（剩余%）→ 反推已用。
+// Premium 请求按月重置：secondLabel='月'（看板第二列如实标注，不再冒充周）。
+const COPILOT_TOKEN_PATH = '/copilot_internal/v2/token';
+const COPILOT_USER_PATH = '/copilot_internal/user';
+async function fetchCopilotPlanUsage(provider) {
+  const key = String(provider.apiKey || '');
+  if (/^(ghp_|github_pat_)/.test(key)) {
+    return { ok: false, error: 'GitHub Copilot 用量查询需要 GitHub OAuth token（gho_…，含 Copilot 授权，如 gh auth token 的输出）；PAT（ghp_/github_pat_）已被 GitHub 拒绝，请更换后重试' };
+  }
+  const base = provider.baseUrl.replace(/\/+$/, '');
+  const headers = { Authorization: `Bearer ${key}`, Accept: 'application/json' };
+  const tokenRes = await tryFetchJson(`${base}${COPILOT_TOKEN_PATH}`, provider, headers);
+  if (!tokenRes.ok) {
+    const msg = tokenRes.status === 401 || tokenRes.status === 403
+      ? `GitHub OAuth token 无效或不含 Copilot 授权（HTTP ${tokenRes.status}）${safeMessage(tokenRes.bodyMessage, key)}`
+      : explainProbeFailure(({ statuses: [tokenRes.status].filter(Boolean), messages: [tokenRes.bodyMessage].filter(Boolean), errors: [tokenRes.error].filter(Boolean), responded: 0, unusable: 0 }), provider, 'plan');
+    return { ok: false, error: msg };
+  }
+  const copilotToken = tokenRes.data?.token;
+  if (!copilotToken) return { ok: false, error: 'GitHub 响应中找不到 Copilot token，请把返回 JSON 发给我适配' };
+  const userRes = await tryFetchJson(`${base}${COPILOT_USER_PATH}`, provider, { Authorization: `Bearer ${copilotToken}`, Accept: 'application/json' });
+  if (!userRes.ok) {
+    const msg = userRes.status === 401 || userRes.status === 403
+      ? `Copilot token 交换成功但用量查询被拒（HTTP ${userRes.status}），请重试或更新 token`
+      : `Copilot 用量查询失败（HTTP ${userRes.status ?? ''}）${safeMessage(userRes.bodyMessage, key)}`;
+    return { ok: false, error: msg };
+  }
+  const used = parseCopilotQuota(userRes.data);
+  if (used == null) {
+    return { ok: true, usage: { mode: 'plan', fiveHourPct: null, weeklyPct: null, secondLabel: '月' } };
+  }
+  return {
+    ok: true,
+    usage: { mode: 'plan', fiveHourPct: null, weeklyPct: clampPct(used), secondLabel: '月' },
+  };
+}
+
+// 火山方舟 Coding Plan：无公开的 Key 直查接口——通用「查询用量」API 走
+// volcengine V4 签名（AK/SK，另一套凭证模型，未接入）。诚实拒答，不做探测。
+function guardVolcanoPlan() {
+  return { ok: false, error: '火山方舟 Coding Plan 暂无公开的 Key 直查用量接口（通用用量 API 需 AK/SK V4 签名，暂未接入）。套餐用量请到火山方舟控制台「用量统计」查看' };
 }
 
 // --- Failure diagnostics ---------------------------------------------------
@@ -913,6 +1064,9 @@ async function fetchBalanceUsage(provider) {
   }
   if (bh === 'stepfun.com' || bh.endsWith('.stepfun.com') || bh === 'stepfun.ai' || bh.endsWith('.stepfun.ai')) {
     return fetchStepFunBalance(provider);
+  }
+  if (bh === 'cherryin.ai' || bh.endsWith('.cherryin.ai')) {
+    return fetchCherryInBalance(provider);
   }
   const balanceCandidates = ['/api/user/balance', '/api/user/wallet', '/api/user/quota'];
   // `matched` is set by accept() for the winning candidate only — probeCandidates

@@ -13,11 +13,15 @@
 | --- | --- | --- | --- | --- |
 | **Kimi Code** | Coding Plan | `https://api.kimi.com/coding/v1`（填光主机 `https://api.kimi.com` 也可以） | Kimi **Code 控制台**的 Key（`sk-kimi-…`） | 不是 platform.moonshot.cn 开放平台的 `sk-` Key |
 | **OpenCode Go** | Coding Plan | `https://opencode.ai/zen/go/v1` | OpenCode Go 的 API Key | 月度窗口暂无看板列，不显示 |
+| **GLM Coding Plan（智谱）** | Coding Plan | `https://open.bigmodel.cn`（填模型端点会自动归一；Z.ai 填 `https://api.z.ai`） | 智谱 API Key（`id.secret` 形） | 5h 列 = TIME_LIMIT；第二列 = Token 额度窗口（官方未明示周期） |
 | **MiniMax Token Plan** | Coding Plan | `https://www.minimaxi.com` | MiniMax 开放平台 Key | 只有 5h 滚动窗口（周侧显示 `--`） |
 | **OpenRouter** | 余额 | `https://openrouter.ai/api/v1` | OpenRouter Key | 显示剩余 Credits（充值 - 已用，USD） |
 | **DeepSeek** | 余额 | `https://api.deepseek.com`（填 `https://api.deepseek.com/v1` 也可以） | DeepSeek 开放平台 Key | 取 CNY 账户总余额 |
 | **Moonshot 开放平台** | 余额 | `https://api.moonshot.cn/v1` | 开放平台 Key（platform.moonshot.cn / .ai） | 按量计费显示账户余额，无 5h/周窗口 |
 | **StepFun** | 余额 | `https://api.stepfun.com` | 阶跃星辰开放平台 Key | Step Plan 订阅额度官方暂无查询接口（余额≠订阅额度） |
+| **CherryIN** | 余额 | `https://open.cherryin.ai` | CherryIN 的 `sk-` Key | New API 栈账单对；显示剩余 Credits（USD） |
+| **GitHub Copilot** | Coding Plan | `https://api.github.com` | GitHub **OAuth token**（`gho_…`，如 `gh auth token`；PAT 不受支持） | 第二列 = Premium 请求月度用量（标签「月」） |
+| **火山方舟 Coding Plan** | — | — | — | 暂无公开 Key 直查接口（用量走控制台；通用 API 需 AK/SK 签名） |
 | OneAPI / NewAPI 网关 | 余额 | 中转站根地址 | 网关 Key | 按网关返回的字段自动识别 |
 
 ## 界面：配置面板 ⇄ 迷你状态条

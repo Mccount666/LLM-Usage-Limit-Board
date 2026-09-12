@@ -360,6 +360,37 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.strictEqual(calls.length, 0, 'plan guard answers directly, zero probes');
   });
 
+  console.log('--- usage:fetch / 智谱 GLM Coding Plan（host bigmodel.cn）---');
+  await t('quota/limit 命中：裸 Key 鉴权（无 Bearer），TIME/TOKEN 双列直读', async () => {
+    await save([{ id: 'zp1', name: 'GLM', baseUrl: 'https://open.bigmodel.cn', mode: 'plan', apiKey: 'id.secret' }]);
+    setRoutes([{ match: '/api/monitor/usage/quota/limit', status: 200, body: { success: true, code: 200, msg: 'ok', data: { level: 'pro', limits: [
+      { type: 'TIME_LIMIT', percentage: 12.5 },
+      { type: 'TOKENS_LIMIT', percentage: 34 },
+    ] } } }]);
+    const r = await fetchUsage('zp1');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.fiveHourPct - 12.5) < 1e-9);
+    assert.ok(Math.abs(r.usage.weeklyPct - 34) < 1e-9);
+    const hit = calls.find((c) => c.url === 'https://open.bigmodel.cn/api/monitor/usage/quota/limit');
+    assert.ok(hit, 'quota endpoint not requested');
+    assert.strictEqual(hit.headers.Authorization, 'id.secret', 'zhipu auth is the RAW key, no Bearer prefix');
+  });
+  await t('填模型端点时归一化到 origin 落查询端点', async () => {
+    await save([{ id: 'zp2', name: 'GLM2', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', mode: 'plan', apiKey: 'id.secret' }]);
+    setRoutes([{ match: '/api/monitor/usage/quota/limit', status: 200, body: { success: true, data: { limits: [{ type: 'TIME_LIMIT', percentage: 20 }] } } }]);
+    const r = await fetchUsage('zp2');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.usage.fiveHourPct, 20);
+    assert.ok(calls.some((c) => c.url === 'https://open.bigmodel.cn/api/monitor/usage/quota/limit'), 'origin-normalized endpoint not requested');
+  });
+  await t('鉴权失败（HTTP 200 + success:false）转述服务商原话', async () => {
+    await save([{ id: 'zp3', name: 'GLM3', baseUrl: 'https://open.bigmodel.cn', mode: 'plan', apiKey: 'bad.key' }]);
+    setRoutes([{ match: '/api/monitor/usage/quota/limit', status: 200, body: { code: 401, msg: '令牌已过期或验证不正确', success: false } }]);
+    const r = await fetchUsage('zp3');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /令牌已过期或验证不正确/);
+  });
+
 
   console.log('--- usage:fetch / Moonshot 开放平台余额（host api.moonshot.cn）---');
   await t('/users/me/balance 命中：data 信封里的 balance 解析', async () => {
