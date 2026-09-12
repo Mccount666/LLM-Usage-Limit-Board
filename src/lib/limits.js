@@ -418,6 +418,11 @@ function parseCopilotQuota(payload) {
  * used_quota, … } }`. one-api quota convention: 500000 quota = 1 USD.
  * Auth failure arrives as HTTP 200 + success:false → null (accept rejects).
  */
+// New API 家族对「无限额度」令牌/账户返回哨兵大数（用户实测显示层为
+// 9999999999.99 级）——换算成美元后远超任何真实余额。≥ 此阈值一律视为
+// 哨兵而非数据，拒绝该候选（谎报巨额余额是最危险方向的错误）。
+const CHERRYIN_SANITY_USD = 1_000_000;
+
 function parseCherryInUserBalance(payload) {
   // Only an EXPLICIT success:false rejects; Cherry Studio's own OAuth balance
   // route (/api/v1/oauth/balance) omits the success flag entirely, so its
@@ -426,7 +431,9 @@ function parseCherryInUserBalance(payload) {
   const d = payload.data && typeof payload.data === 'object' ? payload.data : null;
   const quota = numOf(d?.quota);
   if (quota == null || quota < 0) return null;
-  return { amount: quota / 500000, currency: 'USD' };
+  const amount = quota / 500000;
+  if (amount >= CHERRYIN_SANITY_USD) return null; // unlimited-quota sentinel
+  return { amount, currency: 'USD' };
 }
 
 module.exports = {

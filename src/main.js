@@ -778,7 +778,9 @@ async function fetchCherryInBalance(provider) {
   const diag = newProbeDiag();
   const headers = { Authorization: `Bearer ${provider.apiKey}` };
   const sub = await probeCandidates(provider, 'cherryin-sub', [CHERRYIN_SUB_PATH], headers, (r) => {
-    return numOf(r.data?.hard_limit_usd ?? r.data?.system_hard_limit_usd) != null;
+    // 无限额度令牌的 hard_limit_usd 是 9999999999.99 级哨兵——不得当真。
+    const limit = numOf(r.data?.hard_limit_usd ?? r.data?.system_hard_limit_usd);
+    return limit != null && limit > 0 && limit < 1_000_000;
   }, diag);
   if (sub) {
     const limit = numOf(sub.data?.hard_limit_usd ?? sub.data?.system_hard_limit_usd);
@@ -800,7 +802,10 @@ async function fetchCherryInBalance(provider) {
   // ② 用户族降级（parseCherryInUserBalance 的 accept 内置 success 检查，
   //    200+success:false 的鉴权失败体会被拒）。
   const userDiag = newProbeDiag();
-  const userPaths = ['/api/user/self', '/api/user/balance', '/api/user/quota', '/api/v1/oauth/balance'];
+  // 账户级 OAuth 余额端点优先（Cherry Studio 同款——订阅制账户的真实余额
+  // 在这里；/api/user/self 的 quota 对「无限额度」账户是哨兵大数，靠
+  // parseCherryInUserBalance 的常识阈值拒掉后自然落到下一候选）。
+  const userPaths = ['/api/v1/oauth/balance', '/api/user/self', '/api/user/balance', '/api/user/quota'];
   const authVariants = [
     { Authorization: `Bearer ${provider.apiKey}` },
     { Authorization: String(provider.apiKey || '') },

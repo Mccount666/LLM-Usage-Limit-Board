@@ -440,6 +440,19 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     // 注：stub 仅按 URL 匹配路由，Bearer 变体在 /api/user/quota 上即成功，
     // 裸 token 变体不会走到——其循环逻辑很薄，留待真实站点验收。
   });
+  await t('账户级优先：self 返回无限额度哨兵 → 落到 oauth/balance 取真余额', async () => {
+    await save([{ id: 'ci6', name: 'CherryIN6', baseUrl: 'https://open.cherryin.ai', mode: 'balance', apiKey: 'the-access-token' }]);
+    setRoutes([
+      { match: '/v1/dashboard/billing/subscription', status: 200, body: { hard_limit_usd: 9999999999.99 } },
+      { match: '/v1/dashboard/billing/usage', status: 200, body: { total_usage: 0 } },
+      { match: '/api/v1/oauth/balance', status: 200, body: { data: { quota: 3450000, used_quota: 550000 } } },
+      { match: '/api/user/self', status: 200, body: { success: true, data: { quota: 4999999999500000 } } },
+    ]);
+    const r = await fetchUsage('ci6');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.amount - 6.9) < 1e-9, 'amount=' + r.usage.amount);
+    assert.ok(calls.some((c) => c.url.includes('/api/v1/oauth/balance')), 'account-level endpoint not requested');
+  });
   await t('Cherry Studio 同款 OAuth 余额端点（无 success 标志）也能命中', async () => {
     await save([{ id: 'ci5', name: 'CherryIN5', baseUrl: 'https://open.cherryin.ai', mode: 'balance', apiKey: 'the-access-token' }]);
     setRoutes([
