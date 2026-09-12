@@ -281,6 +281,10 @@ t('CherryIN 用户族：success 信封 + quota 换算（500000 = 1 USD）', () =
   assert.ok(Math.abs(r.amount - 13.8) < 1e-9);
   assert.strictEqual(r.currency, 'USD');
 });
+t('CherryIN：OAuth 余额端点形状（无 success 标志）→ 通过', () => {
+  const r = parseCherryInUserBalance({ data: { quota: 3450000, used_quota: 550000 } });
+  assert.ok(Math.abs(r.amount - 6.9) < 1e-9);
+});
 t('CherryIN 用户族：鉴权失败体（200 + success:false）→ null；负值 → null', () => {
   assert.strictEqual(parseCherryInUserBalance({ message: 'Unauthorized, invalid access token', success: false }), null);
   assert.strictEqual(parseCherryInUserBalance({ success: true, data: { quota: -1 } }), null);

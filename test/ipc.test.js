@@ -440,6 +440,21 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     // 注：stub 仅按 URL 匹配路由，Bearer 变体在 /api/user/quota 上即成功，
     // 裸 token 变体不会走到——其循环逻辑很薄，留待真实站点验收。
   });
+  await t('Cherry Studio 同款 OAuth 余额端点（无 success 标志）也能命中', async () => {
+    await save([{ id: 'ci5', name: 'CherryIN5', baseUrl: 'https://open.cherryin.ai', mode: 'balance', apiKey: 'the-access-token' }]);
+    setRoutes([
+      { match: '/v1/dashboard/billing/subscription', status: 401, body: { error: { message: 'Invalid token' } } },
+      { match: '/v1/dashboard/billing/usage', status: 401, body: { error: { message: 'Invalid token' } } },
+      { match: '/api/user/self', status: 200, body: { message: 'Unauthorized, invalid access token', success: false } },
+      { match: '/api/user/balance', status: 200, body: { message: 'Unauthorized, invalid access token', success: false } },
+      { match: '/api/user/quota', status: 200, body: { message: 'Unauthorized, invalid access token', success: false } },
+      { match: '/api/v1/oauth/balance', status: 200, body: { data: { quota: 3450000, used_quota: 550000 } } },
+    ]);
+    const r = await fetchUsage('ci5');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.amount - 6.9) < 1e-9, 'amount=' + r.usage.amount);
+    assert.ok(calls.some((c) => c.url.includes('/api/v1/oauth/balance')), 'oauth balance route not requested');
+  });
   await t('两段全失败：保留服务商原话并提示访问令牌替代路径', async () => {
     await save([{ id: 'ci4', name: 'CherryIN4', baseUrl: 'https://open.cherryin.ai', mode: 'balance', apiKey: 'sk-ci-test' }]);
     setRoutes([{ match: 'cherryin.ai', status: 402, body: { error: { message: '无效的令牌' } } }]);

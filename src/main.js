@@ -32,7 +32,7 @@ const {
 
 // --- In-memory provider cache (P1-5 + N-4) --------------------------------
 // Declared at the top so no IPC handler can ever hit TDZ.
-// `usage:fetch` is called every 60s × N providers. Re-reading the encrypted
+// `usage:fetch` is called every 10s × N providers. Re-reading the encrypted
 // file from disk and re-running DPAPI on every poll is wasteful and blocks
 // the main process event loop. We hydrate once and invalidate on writes.
 let providerCache = null;
@@ -44,7 +44,7 @@ function getCachedProviders() {
 
 // Which candidate path last produced a usable payload, keyed `${id}:${kind}`.
 // Endpoint probing (P3-C) would otherwise re-request every candidate on every
-// 60s poll; remembering the winner keeps the steady state at ONE request while
+// 10s poll; remembering the winner keeps the steady state at ONE request while
 // the first poll still discovers it quickly (probes run concurrently).
 const candidatePathCache = new Map();
 
@@ -800,7 +800,7 @@ async function fetchCherryInBalance(provider) {
   // ② 用户族降级（parseCherryInUserBalance 的 accept 内置 success 检查，
   //    200+success:false 的鉴权失败体会被拒）。
   const userDiag = newProbeDiag();
-  const userPaths = ['/api/user/self', '/api/user/balance', '/api/user/quota'];
+  const userPaths = ['/api/user/self', '/api/user/balance', '/api/user/quota', '/api/v1/oauth/balance'];
   const authVariants = [
     { Authorization: `Bearer ${provider.apiKey}` },
     { Authorization: String(provider.apiKey || '') },
@@ -822,7 +822,7 @@ async function fetchCherryInBalance(provider) {
   // 两段都失败：优先转述第一段服务商的原话（用户看到的就是 CherryIN 的措辞），
   // 并给出「访问令牌」这条已验证存在的替代路径。
   const msg = explainProbeFailure(diag, provider, 'balance');
-  const hint = '。若 sk- 令牌始终被拒，请改填控制台「设置 → 生成访问令牌」的令牌（两种都会自动尝试）；仍失败请把 /v1/dashboard/billing/subscription 的返回 JSON 发给我适配';
+  const hint = '。CherryIN 的 sk- 模型令牌不被余额端点接受（401 Invalid token 实测即此因）：请改填控制台「设置 → 生成访问令牌」的令牌（两种都会自动尝试，Cherry Studio 同款余额端点已并入候选）；仍失败请把 /v1/dashboard/billing/subscription 与 /api/user/self 的返回 JSON 发给我适配';
   return { ok: false, error: msg + hint };
 }
 

@@ -419,7 +419,10 @@ function parseCopilotQuota(payload) {
  * Auth failure arrives as HTTP 200 + success:false → null (accept rejects).
  */
 function parseCherryInUserBalance(payload) {
-  if (!payload || payload.success !== true) return null;
+  // Only an EXPLICIT success:false rejects; Cherry Studio's own OAuth balance
+  // route (/api/v1/oauth/balance) omits the success flag entirely, so its
+  // { data: { quota, used_quota } } must pass too.
+  if (!payload || typeof payload !== 'object' || payload.success === false) return null;
   const d = payload.data && typeof payload.data === 'object' ? payload.data : null;
   const quota = numOf(d?.quota);
   if (quota == null || quota < 0) return null;

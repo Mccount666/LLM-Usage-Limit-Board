@@ -1,7 +1,7 @@
 // Renderer: state + UI for the LLM usage widget.
 // All persistent storage goes through window.api (preload -> main -> JSON file).
 
-const POLL_INTERVAL_MS = 60_000;
+const POLL_INTERVAL_MS = 10_000;
 const THRESHOLDS_LS_KEY = 'llm-board.balanceThresholds';
 const PRIVACY_ACK_KEY = 'llm-board.privacyAck';
 const DISPLAY_MODE_LS_KEY = 'llm-board.displayMode';
@@ -245,7 +245,7 @@ async function onSaveProvider(evt) {
   // version mutated state first and only returned on failure, which left a ghost
   // entry behind: the next renderAll() (e.g. after deleting some other provider)
   // would display a subscription that was never written to disk, and it would be
-  // polled every 60s until restart. Commit only after disk accepted it.
+  // polled every 10s until restart. Commit only after disk accepted it.
   const nextProvider = {
     id,
     name,
