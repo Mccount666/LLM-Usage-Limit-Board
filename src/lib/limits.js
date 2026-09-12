@@ -207,7 +207,11 @@ const WEEKLY_MINUTES = 10080;
 function windowMinutes(w) {
   if (!w || typeof w !== 'object') return null;
   const d = numOf(w.duration);
-  const u = typeof w.timeUnit === 'string' ? w.timeUnit.toUpperCase() : '';
+  // Live Kimi responses spell it "TIME_UNIT_MINUTE"; community dialects use
+  // plain "MINUTE". Normalize by stripping the enum prefix.
+  const u = typeof w.timeUnit === 'string'
+    ? w.timeUnit.toUpperCase().replace(/^TIME_UNIT_/, '')
+    : '';
   if (d == null || d <= 0 || !(u in WINDOW_MINUTES)) return null;
   return d * WINDOW_MINUTES[u];
 }
@@ -260,16 +264,25 @@ function pickWindowItem(items, wantMinutes, fallbackPred) {
 }
 
 /**
- * Kimi Code `/usages` payload. Shape 1: `{ data: [...] }`. Shape 2:
- * `{ usage: ..., limits: [...] }` (numbers may sit under each item's `detail`).
+ * Kimi Code `/usages` payload. Shape 1: `{ data: [...] }`. Shape 2 (the LIVE
+ * Kimi shape, cross-verified against XiaoZ-0218/kimi-usage):
+ * `{ usage: {limit, remaining, …}, limits: [{ window: {duration,
+ * timeUnit:'TIME_UNIT_MINUTE'}, detail: {limit, remaining, …} }], … }` —
+ * the weekly quota lives in the top-level `usage` summary, values are
+ * numeric strings, and consumption is remaining-based.
  */
 function parseWindowedUsage(payload) {
   let items = Array.isArray(payload?.data) ? payload.data : null;
   if (!items && Array.isArray(payload?.limits)) items = payload.limits;
-  if (!items) return { fiveHourPct: null, weeklyPct: null };
-  const fiveHour = pickWindowItem(items, FIVE_HOUR_MINUTES);
-  const weekly = pickWindowItem(items, WEEKLY_MINUTES,
-    (it) => it && typeof it === 'object' && it.model_name === 'all');
+  const fiveHour = items ? pickWindowItem(items, FIVE_HOUR_MINUTES) : null;
+  // Weekly, in order of trust: an explicit weekly-window row; the top-level
+  // `usage` summary (live Kimi shape); the `model_name:'all'` row (community
+  // dialect). Missing stays null — never a forged 0.
+  const weekly = (items ? pickWindowItem(items, WEEKLY_MINUTES) : null)
+    ?? windowItemPair(payload?.usage)
+    ?? (items
+      ? pickWindowItem(items, WEEKLY_MINUTES, (it) => it && typeof it === 'object' && it.model_name === 'all')
+      : null);
   return {
     fiveHourPct: fiveHour ? pairPct(fiveHour) : null,
     weeklyPct: weekly ? pairPct(weekly) : null,

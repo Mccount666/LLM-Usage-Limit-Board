@@ -447,10 +447,12 @@ async function fetchPlanUsage(provider) {
   };
 }
 
-// Kimi Code 用量：{base}/usages 优先、/usage 回落（并发探测，先到先用并记忆，
-// 稳态轮询只发一枪）。语义沿用 plan 模式：解析不出的一侧留 null（灰 "--"），
-// 绝不伪造 0%。
-const KIMI_USAGE_PATHS = ['/usages', '/usage'];
+// Kimi Code 用量：候选路径同时兼容两种 Base URL 填法——完整形
+// `https://api.kimi.com/coding/v1`（拼 /usages 即命中）与光主机
+// `https://api.kimi.com`（社区工具 XiaoZ-0218/kimi-usage 的约定，需补
+// /coding/v1 前缀）。并发探测先到先用并记忆，稳态轮询只发一枪。语义沿用
+// plan 模式：解析不出的一侧留 null（灰 "--"），绝不伪造 0%。
+const KIMI_USAGE_PATHS = ['/usages', '/usage', '/coding/v1/usages', '/coding/v1/usage'];
 async function fetchKimiPlanUsage(provider) {
   const diag = newProbeDiag();
   const headers = {
@@ -463,9 +465,9 @@ async function fetchKimiPlanUsage(provider) {
   }, diag);
   if (!res) {
     const msg = explainProbeFailure(diag, provider, 'plan');
-    // 404 主导的失败大概率是 Base URL 没带 /coding/v1 —— 把正确填法直接给出来。
+    // 404 主导的失败说明连路径都没对上——把两种正确填法直接给出来。
     const hint = /404|没有提供可用的用量接口/.test(msg)
-      ? '。Kimi Code 的 Base URL 应为 https://api.kimi.com/coding/v1' : '';
+      ? '。Kimi Code 的 Base URL 填 https://api.kimi.com/coding/v1 或 https://api.kimi.com 均可' : '';
     return { ok: false, error: msg + hint };
   }
   const p = parseWindowedUsage(res.data);

@@ -197,6 +197,17 @@ t('Kimi：坏形状不抛错 -> 双 null', () => {
   assert.deepStrictEqual(parseWindowedUsage({ data: [] }), { fiveHourPct: null, weeklyPct: null });
   assert.deepStrictEqual(parseWindowedUsage(null), { fiveHourPct: null, weeklyPct: null });
 });
+t('Kimi 真实形状：TIME_UNIT_MINUTE + 顶层 usage 周汇总（XiaoZ-0218/kimi-usage 同款响应）', () => {
+  const r = parseWindowedUsage({
+    usage: { limit: '7000', remaining: '6300', resetTime: '2026-09-15T00:00:00Z' },
+    limits: [
+      { window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' }, detail: { limit: '100', remaining: '75', resetTime: '2026-09-12T18:00:00Z' } },
+    ],
+    totalQuota: { limit: '10000', remaining: '9000' },
+  });
+  assert.strictEqual(r.fiveHourPct, 25);
+  assert.strictEqual(r.weeklyPct, 10);
+});
 t('OpenCode Go：rolling/weekly percent 直读（0-100 不再乘 100）', () => {
   const r = parseOpenCodeUsage({ usage: {
     rolling: { status: 'ok', percent: 19.5, resetsAt: '2026-09-12T00:00:00Z' },

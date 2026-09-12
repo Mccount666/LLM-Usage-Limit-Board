@@ -225,6 +225,23 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.strictEqual(r.ok, false);
     assert.match(r.error, /https:\/\/api\.kimi\.com\/coding\/v1/);
   });
+  await t('Base URL 为光主机时，回落到规范路径 /coding/v1/usages（真实响应形状）', async () => {
+    await save([{ id: 'kimi4', name: 'Kimi4', baseUrl: 'https://api.kimi.com', mode: 'plan', apiKey: 'sk-kimi-test' }]);
+    setRoutes([{ match: '/coding/v1/usages', status: 200, body: {
+      usage: { limit: '7000', remaining: '6300', resetTime: '2026-09-15T00:00:00Z' },
+      limits: [
+        { window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' }, detail: { limit: '100', remaining: '75', resetTime: '2026-09-12T18:00:00Z' } },
+      ],
+      totalQuota: { limit: '10000', remaining: '9000' },
+    } }]);
+    const r = await fetchUsage('kimi4');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.usage.fiveHourPct, 25);
+    assert.strictEqual(r.usage.weeklyPct, 10);
+    const hit = calls.find((c) => c.url === 'https://api.kimi.com/coding/v1/usages');
+    assert.ok(hit, 'canonical candidate not requested');
+    assert.strictEqual(hit.headers['User-Agent'], 'KimiCLI/1.6');
+  });
 
   console.log('--- usage:fetch / OpenCode Go 专用分支（host opencode.ai）---');
   await t('/usage 命中：rolling/weekly percent 直读', async () => {

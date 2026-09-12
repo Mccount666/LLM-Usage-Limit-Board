@@ -11,7 +11,7 @@
 
 | 服务商 | Base URL | API Key | 说明 |
 | --- | --- | --- | --- |
-| **Kimi Code** | `https://api.kimi.com/coding/v1` | Kimi **Code 控制台**的 Key（`sk-kimi-…`） | 不是 platform.moonshot.cn 开放平台的 `sk-` Key；Coding Plan 模式 |
+| **Kimi Code** | `https://api.kimi.com/coding/v1`（填光主机 `https://api.kimi.com` 也可以） | Kimi **Code 控制台**的 Key（`sk-kimi-…`） | 不是 platform.moonshot.cn 开放平台的 `sk-` Key；Coding Plan 模式 |
 | **OpenCode Go** | `https://opencode.ai/zen/go/v1` | OpenCode Go 的 API Key | 月度窗口暂无看板列，不显示 |
 | **Moonshot 开放平台** | `https://api.moonshot.cn/v1` | 开放平台 Key（platform.moonshot.cn / .ai） | **余额模式**；按量计费显示账户余额，无 5h/周窗口 |
 | OneAPI / NewAPI 网关 | 中转站根地址 | 网关 Key | 按网关返回的字段自动识别 |
