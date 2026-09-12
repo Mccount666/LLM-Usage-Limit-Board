@@ -7,14 +7,24 @@
 | **Coding Plan** | Kimi Code / OpenCode Go / Claude Code / Cursor / OpenAI Codex / 包月套餐 | 5h 限额 % + 周限额 % |
 | **余额（中转站）** | OneAPI / NewAPI / 自建中转 / 按量 API | 账户余额 |
 
-内置识别的服务商（都走 **Coding Plan** 模式，按下面填即可）：
+内置识别的服务商（按表内模式填写即可）：
 
-| 服务商 | Base URL | API Key | 说明 |
-| --- | --- | --- | --- |
-| **Kimi Code** | `https://api.kimi.com/coding/v1`（填光主机 `https://api.kimi.com` 也可以） | Kimi **Code 控制台**的 Key（`sk-kimi-…`） | 不是 platform.moonshot.cn 开放平台的 `sk-` Key；Coding Plan 模式 |
-| **OpenCode Go** | `https://opencode.ai/zen/go/v1` | OpenCode Go 的 API Key | 月度窗口暂无看板列，不显示 |
-| **Moonshot 开放平台** | `https://api.moonshot.cn/v1` | 开放平台 Key（platform.moonshot.cn / .ai） | **余额模式**；按量计费显示账户余额，无 5h/周窗口 |
-| OneAPI / NewAPI 网关 | 中转站根地址 | 网关 Key | 按网关返回的字段自动识别 |
+| 服务商 | 模式 | Base URL | API Key | 说明 |
+| --- | --- | --- | --- | --- |
+| **Kimi Code** | Coding Plan | `https://api.kimi.com/coding/v1`（填光主机 `https://api.kimi.com` 也可以） | Kimi **Code 控制台**的 Key（`sk-kimi-…`） | 不是 platform.moonshot.cn 开放平台的 `sk-` Key |
+| **OpenCode Go** | Coding Plan | `https://opencode.ai/zen/go/v1` | OpenCode Go 的 API Key | 月度窗口暂无看板列，不显示 |
+| **MiniMax Token Plan** | Coding Plan | `https://www.minimaxi.com` | MiniMax 开放平台 Key | 只有 5h 滚动窗口（周侧显示 `--`） |
+| **OpenRouter** | 余额 | `https://openrouter.ai/api/v1` | OpenRouter Key | 显示剩余 Credits（充值 - 已用，USD） |
+| **DeepSeek** | 余额 | `https://api.deepseek.com` | DeepSeek 开放平台 Key | 取 CNY 账户总余额 |
+| **Moonshot 开放平台** | 余额 | `https://api.moonshot.cn/v1` | 开放平台 Key（platform.moonshot.cn / .ai） | 按量计费显示账户余额，无 5h/周窗口 |
+| **StepFun** | 余额 | `https://api.stepfun.com` | 阶跃星辰开放平台 Key | Step Plan 订阅额度官方暂无查询接口（余额≠订阅额度） |
+| OneAPI / NewAPI 网关 | 余额 | 中转站根地址 | 网关 Key | 按网关返回的字段自动识别 |
+
+## 界面：配置面板 ⇄ 迷你状态条
+
+- **配置面板**（420×520）：设置订阅、看告警阈值、看每家的详细读数。首次启动或点托盘「配置面板」进入。
+- **迷你状态条**：**新订阅保存且首次取数成功后自动收缩**成屏幕右下角的一条半透明横条——每个订阅一项（`名称  5h 12.5% · 周 3.0%` 或 `名称 $12.34`），颜色随阈值变绿/黄/红。
+- 迷你条**完全鼠标穿透**：点击、悬停都会落到它下面的窗口上，它只是"看"。要改配置、回面板，用**托盘菜单**（「配置面板」/「迷你状态条」随时切换，选择会被记住）。
 
 ## 隐私原则（多用户可放心使用）
 

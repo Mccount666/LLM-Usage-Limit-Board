@@ -379,6 +379,30 @@ app.whenReady().then(async () => {
     fs.writeFileSync(shot2, image2.toPNG());
     ck('关闭提示后的截图非空白', image2.toPNG().length > 3000, image2.toPNG().length + ' bytes');
     console.log('screenshot (board): ' + shot2);
+  } else if (testCase === 'mini') {
+    // 双态窗口：预置 displayMode=mini 后重载，渲染层应收缩成迷你状态条——
+    // body.mini 挂类、迷你条可见、面板元素全部隐藏；窗口几何/穿透由主进程
+    // 侧（window:set-display-mode）负责，不在渲染断言面内。
+    await win.webContents.executeJavaScript(`localStorage.setItem('llm-board.displayMode', 'mini'); 'set'`);
+    await win.webContents.reload();
+    await wait(1500);
+    const res = JSON.parse(
+      await win.webContents.executeJavaScript(`(() => JSON.stringify({
+        mini: document.body.classList.contains('mini'),
+        barVisible: !document.getElementById('miniBar').classList.contains('hidden'),
+        headerHidden: getComputedStyle(document.querySelector('.widget-header')).display === 'none',
+        boardHidden: getComputedStyle(document.querySelector('.board')).display === 'none',
+        items: document.querySelectorAll('.mini-bar .mi').length,
+        persisted: (() => { try { return localStorage.getItem('llm-board.displayMode'); } catch { return null; } })(),
+      }))()`),
+    );
+    ck('body.mini 生效', res.mini === true, JSON.stringify(res));
+    ck('迷你状态条可见', res.barVisible === true, String(res.barVisible));
+    ck('面板头部隐藏', res.headerHidden === true, String(res.headerHidden));
+    ck('看板隐藏', res.boardHidden === true, String(res.boardHidden));
+    ck('每个订阅一个迷你项', res.items === 6, String(res.items));
+    ck('displayMode 偏好持久化', res.persisted === 'mini', String(res.persisted));
+    ck('渲染进程无 console 错误', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
   } else {
     // P2-B: loadProviders() rejecting must not blank the widget silently.
     const res = JSON.parse(

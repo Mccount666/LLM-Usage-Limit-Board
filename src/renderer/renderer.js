@@ -4,6 +4,7 @@
 const POLL_INTERVAL_MS = 60_000;
 const THRESHOLDS_LS_KEY = 'llm-board.balanceThresholds';
 const PRIVACY_ACK_KEY = 'llm-board.privacyAck';
+const DISPLAY_MODE_LS_KEY = 'llm-board.displayMode';
 
 const DEFAULT_THRESHOLDS = { warn: 50, danger: 10 };
 
@@ -15,7 +16,17 @@ const state = {
   lastUsage: new Map(), // id -> { usage } | { error }
   thresholds: loadThresholds(),
   polling: false,
+  // 'config' = 交互面板；'mini' = 透明穿透状态条（校验成功后自动收缩）。
+  displayMode: loadDisplayMode(),
 };
+
+function loadDisplayMode() {
+  try {
+    return localStorage.getItem(DISPLAY_MODE_LS_KEY) === 'mini' ? 'mini' : 'config';
+  } catch {
+    return 'config';
+  }
+}
 
 function loadThresholds() {
   try {
@@ -70,6 +81,8 @@ const els = {
   // thresholds
   thresholdWarn: document.getElementById('thresholdWarn'),
   thresholdDanger: document.getElementById('thresholdDanger'),
+  // mini status bar
+  miniBar: document.getElementById('miniBar'),
 };
 
 // --- Boot -------------------------------------------------------------------
@@ -89,6 +102,9 @@ const els = {
   renderLoadError(loadError);
   renderPrivacyNotice();
   renderAll();
+  // 恢复上次的显示形态（mini = 透明穿透状态条），并接受托盘的强制切换。
+  applyDisplayMode(state.displayMode, { persist: false });
+  window.api.onUiMode((mode) => applyDisplayMode(mode));
   // Register the interval BEFORE the first fetch: pollOne()/applyUsageRow() can
   // reject in ways we have not anticipated, and a rejected pollAll() used to
   // skip this line entirely — leaving the board frozen on stale numbers with
@@ -253,7 +269,11 @@ async function onSaveProvider(evt) {
   resetForm();
   renderAll();
   renderHttpWarning();
-  pollOne(id);
+  const outcome = await pollOne(id);
+  // 用户要求的流程：填写 → 保存 → 校验成功 → 收缩成迷你状态条。
+  // 仅对“新增”的订阅生效——编辑/删除不自动收缩，避免打断后续调整；
+  // 校验失败（横幅报错）保持面板展开，用户需要看到错误并修正。
+  if (outcome?.usage && isNew) applyDisplayMode('mini');
 }
 
 function showSaveError(msg) {
@@ -348,7 +368,90 @@ async function deleteProvider(id) {
 function renderAll() {
   renderProviderList();
   renderUsage();
+  renderMiniBar();
   els.empty.classList.toggle('hidden', state.providers.length > 0);
+}
+
+// --- Display modes（config 面板 / mini 状态条）------------------------------
+/**
+ * 切换显示形态。mini：窗口改小 + 鼠标完全穿透（点击落到下层窗口），渲染层
+ * 只重绘一条半透明横条；config：恢复交互面板。persist=false 用于启动恢复
+ * （不覆盖已存偏好）。托盘强制切换经 onUiMode 也走这里。
+ */
+function applyDisplayMode(mode, opts = {}) {
+  const m = mode === 'mini' ? 'mini' : 'config';
+  state.displayMode = m;
+  if (opts.persist !== false) {
+    try {
+      localStorage.setItem(DISPLAY_MODE_LS_KEY, m);
+    } catch {
+      /* storage 不可用 → 仅本次会话生效 */
+    }
+  }
+  document.body.classList.toggle('mini', m === 'mini');
+  els.miniBar.classList.toggle('hidden', m !== 'mini');
+  if (m === 'mini') {
+    renderMiniBar();
+    // 先让布局落地再量宽，量完交主进程改窗口几何（内容可能比默认宽/窄）。
+    requestAnimationFrame(() => {
+      if (state.displayMode !== 'mini') return;
+      const w = els.miniBar.classList.contains('hidden') ? undefined : els.miniBar.offsetWidth + 28;
+      window.api.setDisplayMode('mini', w).catch(() => {});
+    });
+  } else {
+    window.api.setDisplayMode('config').catch(() => {});
+  }
+}
+
+/** 从 lastUsage 缓存重绘迷你条——不发任何请求，纯缓存视图。 */
+function renderMiniBar() {
+  if (!els.miniBar) return;
+  els.miniBar.innerHTML = '';
+  if (!state.providers.length) {
+    const s = document.createElement('span');
+    s.className = 'mi-empty';
+    s.textContent = '暂无订阅——托盘菜单「配置面板」可添加';
+    els.miniBar.appendChild(s);
+    return;
+  }
+  for (const p of state.providers) {
+    const wrap = document.createElement('span');
+    wrap.className = 'mi';
+    wrap.title = p.name;
+    const name = document.createElement('span');
+    name.className = 'mi-name';
+    name.textContent = p.name;
+    const val = document.createElement('span');
+    const last = state.lastUsage.get(p.id);
+    if (!last) {
+      val.className = 'mi-val unknown';
+      val.textContent = '…';
+    } else if (last.error) {
+      val.className = 'mi-val danger';
+      val.textContent = '⚠ 取数失败';
+      val.title = last.error;
+    } else if (last.usage.mode === 'balance') {
+      const amount = Number.isFinite(last.usage.amount) ? last.usage.amount : 0;
+      val.className = `mi-val ${balanceLevel(amount, state.thresholds.warn, state.thresholds.danger)}`;
+      val.textContent = formatBalance(amount, last.usage.currency);
+    } else {
+      const parts = [];
+      let worst = 'ok';
+      for (const [label, pct] of [['5h', last.usage.fiveHourPct], ['周', last.usage.weeklyPct]]) {
+        if (!Number.isFinite(pct)) {
+          parts.push(`${label} --`);
+          continue;
+        }
+        parts.push(`${label} ${pct.toFixed(1)}%`);
+        const lv = pct >= 85 ? 'danger' : pct >= 60 ? 'warn' : 'ok';
+        if (lv === 'danger' || (lv === 'warn' && worst === 'ok')) worst = lv;
+      }
+      val.className = `mi-val ${worst}`;
+      val.textContent = parts.join(' · ');
+    }
+    wrap.append(name, val);
+    els.miniBar.appendChild(wrap);
+  }
 }
 
 function renderProviderList() {
@@ -608,6 +711,9 @@ async function pollOne(id) {
   } catch (renderErr) {
     console.error('applyUsageRow failed; row left as-is', renderErr);
   }
+  // mini 条与看板共享这份缓存；返回结果供“保存即校验”流程使用。
+  renderMiniBar();
+  return outcome;
 }
 
 // --- Util ------------------------------------------------------------------

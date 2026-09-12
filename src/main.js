@@ -19,6 +19,9 @@ const {
   clampPct,
   parseWindowedUsage,
   parseOpenCodeUsage,
+  parseOpenRouterCredits,
+  parseDeepSeekBalance,
+  parseMiniMaxRemains,
   FIVE_HOUR_SPEC,
   WEEKLY_SPEC,
 } = require('./lib/limits');
@@ -141,11 +144,51 @@ const TRAY_ICON_DATA_URL =
 
 let tray = null;
 
+// --- Display modes: config（交互面板）/ mini（透明穿透状态条）----------------
+// mini 的窗口宽度由渲染层量好传上来；位置锚在工作区右下角。穿透 =
+// setIgnoreMouseEvents(true)：点击/悬停全部落到它下面的窗口，状态条只可看，
+// 因此回到配置面板的唯一入口是托盘。
+function applyWindowDisplayMode(mode, width) {
+  if (!widgetWindow || widgetWindow.isDestroyed()) return;
+  const wa = screen.getPrimaryDisplay().workArea;
+  if (mode === 'mini') {
+    const w = Math.max(200, Math.min(Number(width) || 560, wa.width - 24));
+    const h = 44;
+    widgetWindow.setBounds({
+      x: wa.x + wa.width - w - 12,
+      y: wa.y + wa.height - h - 8,
+      width: w,
+      height: h,
+    });
+    widgetWindow.setIgnoreMouseEvents(true);
+  } else {
+    widgetWindow.setBounds({
+      x: wa.x + wa.width - 420 - 20,
+      y: wa.y + wa.height - 520 - 20,
+      width: 420,
+      height: 520,
+    });
+    widgetWindow.setIgnoreMouseEvents(false);
+    widgetWindow.show();
+    widgetWindow.focus();
+  }
+}
+
+/** 主进程侧切换形态，并通知渲染层（渲染层负责 localStorage 偏好与条内重绘）。 */
+function setDisplayModeAndNotify(mode, width) {
+  applyWindowDisplayMode(mode, width);
+  if (widgetWindow && !widgetWindow.isDestroyed()) {
+    widgetWindow.webContents.send('ui:mode', mode === 'mini' ? 'mini' : 'config');
+  }
+}
+
 function showWidget() {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
   if (widgetWindow.isMinimized()) widgetWindow.restore();
   widgetWindow.show();
   widgetWindow.focus();
+  // 托盘是迷你条唯一可回的入口：显示看板 = 回到交互面板。
+  setDisplayModeAndNotify('config');
 }
 
 function ensureTray() {
@@ -155,6 +198,9 @@ function ensureTray() {
     tray.setToolTip('LLM 用量看板');
     tray.setContextMenu(
       Menu.buildFromTemplate([
+        { label: '配置面板', click: () => setDisplayModeAndNotify('config') },
+        { label: '迷你状态条', click: () => setDisplayModeAndNotify('mini') },
+        { type: 'separator' },
         { label: '显示看板', click: showWidget },
         { type: 'separator' },
         { label: '退出', click: () => app.quit() },
@@ -177,6 +223,10 @@ ipcMain.handle('window:hide', () => {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
   widgetWindow.hide();
   ensureTray();
+});
+ipcMain.handle('window:set-display-mode', (_evt, mode, width) => {
+  applyWindowDisplayMode(mode === 'mini' ? 'mini' : 'config', width);
+  return { ok: true };
 });
 
 app.on('before-quit', () => {
@@ -422,6 +472,18 @@ async function fetchPlanUsage(provider) {
   if (host === 'opencode.ai' || host.endsWith('.opencode.ai')) {
     return fetchOpenCodeGoPlanUsage(provider);
   }
+  // MiniMax Token Plan：GET {base}/v1/api/openplatform/coding_plan/remains。
+  // 只覆盖 5h 滚动窗口，响应无周侧 → weeklyPct 留 null（灰 "--"）。
+  if (host === 'minimaxi.com' || host.endsWith('.minimaxi.com') ||
+      host === 'minimax.io' || host.endsWith('.minimax.io')) {
+    return fetchMiniMaxPlanUsage(provider);
+  }
+  // Step Plan（阶跃星辰订阅制）与 MiniMax 同为 5h+周双窗口，但官方至今未开放
+  // 查询接口（cc-switch #4454 在等）——按量余额请走「余额」模式。
+  if (host === 'stepfun.com' || host.endsWith('.stepfun.com') ||
+      host === 'stepfun.ai' || host.endsWith('.stepfun.ai')) {
+    return { ok: false, error: 'Step Plan 暂无公开的 5h/周额度接口（官方未开放）。按量余额请改用「余额」模式，Base URL 填 https://api.stepfun.com' };
+  }
 
   // Strict accept: a 200 with `{success:false,...}` or a user object without any
   // limit field must NOT be accepted, or it would be cached and the endpoint
@@ -529,6 +591,99 @@ async function fetchMoonshotBalance(provider) {
     return { ok: false, error: msg + hint };
   }
   return { ok: true, usage: { mode: 'balance', ...matched } };
+}
+
+// OpenRouter 按量余额：{base}/credits（base = https://openrouter.ai/api/v1）→
+// { data: { total_credits, total_usage } }（USD 字符串）。可用 = 充值 - 已用，
+// 解析交给 parseOpenRouterCredits。
+const OPENROUTER_CREDIT_PATHS = ['/credits'];
+async function fetchOpenRouterBalance(provider) {
+  const diag = newProbeDiag();
+  const headers = { Authorization: `Bearer ${provider.apiKey}` };
+  let parsed = null;
+  const res = await probeCandidates(provider, 'openrouter-credits', OPENROUTER_CREDIT_PATHS, headers, (r) => {
+    parsed = parseOpenRouterCredits(r.data);
+    return parsed != null;
+  }, diag);
+  if (!res) {
+    const msg = explainProbeFailure(diag, provider, 'balance');
+    const hint = /404|没有提供可用的用量接口/.test(msg)
+      ? '。OpenRouter 的 Base URL 填 https://openrouter.ai/api/v1' : '';
+    return { ok: false, error: msg + hint };
+  }
+  return { ok: true, usage: { mode: 'balance', amount: parsed.amount, currency: parsed.currency, field: 'credits' } };
+}
+
+// DeepSeek 按量余额：{base}/user/balance（base = https://api.deepseek.com）→
+// { balance: [{ currency, total_balance, … }] }。取 CNY 行的 total_balance。
+const DEEPSEEK_BALANCE_PATHS = ['/user/balance'];
+async function fetchDeepSeekBalance(provider) {
+  const diag = newProbeDiag();
+  const headers = { Authorization: `Bearer ${provider.apiKey}` };
+  let parsed = null;
+  const res = await probeCandidates(provider, 'deepseek-balance', DEEPSEEK_BALANCE_PATHS, headers, (r) => {
+    parsed = parseDeepSeekBalance(r.data);
+    return parsed != null;
+  }, diag);
+  if (!res) {
+    const msg = explainProbeFailure(diag, provider, 'balance');
+    const hint = /404|没有提供可用的用量接口/.test(msg)
+      ? '。DeepSeek 的 Base URL 填 https://api.deepseek.com' : '';
+    return { ok: false, error: msg + hint };
+  }
+  return { ok: true, usage: { mode: 'balance', amount: parsed.amount, currency: parsed.currency, field: 'balance' } };
+}
+
+// StepFun 按量余额：{base}/v1/accounts（base = https://api.stepfun.com）→
+// { object: "account", balance: <float>, … }——balance 字段恰在 normalizeBalance
+// 的字段表里，直接复用。注意 Step Plan 订阅额度与该余额相互独立且无查询接口。
+const STEPFUN_BALANCE_PATHS = ['/v1/accounts'];
+async function fetchStepFunBalance(provider) {
+  const diag = newProbeDiag();
+  const headers = { Authorization: `Bearer ${provider.apiKey}` };
+  let matched = null;
+  const res = await probeCandidates(provider, 'stepfun-balance', STEPFUN_BALANCE_PATHS, headers, (r) => {
+    matched = normalizeBalance(r.data);
+    return matched != null;
+  }, diag);
+  if (!res) {
+    const msg = explainProbeFailure(diag, provider, 'balance');
+    const hint = /404|没有提供可用的用量接口/.test(msg)
+      ? '。StepFun 的 Base URL 填 https://api.stepfun.com' : '';
+    return { ok: false, error: msg + hint };
+  }
+  return { ok: true, usage: { mode: 'balance', ...matched } };
+}
+
+// MiniMax Token Plan 用量：{base}/v1/api/openplatform/coding_plan/remains
+// （base 填 https://www.minimaxi.com）。语义陷阱（已对 coding-plan-monitor 的
+// minimax.ts 核实）：current_interval_usage_count 是「剩余」不是「已用」——
+// used = total - 剩余。解析交给 parseMiniMaxRemains，这里只做编排与提示。
+const MINIMAX_REMAINS_PATHS = ['/v1/api/openplatform/coding_plan/remains'];
+async function fetchMiniMaxPlanUsage(provider) {
+  const diag = newProbeDiag();
+  const headers = {
+    Authorization: `Bearer ${provider.apiKey}`,
+    'Content-Type': 'application/json',
+  };
+  const res = await probeCandidates(provider, 'minimax-remains', MINIMAX_REMAINS_PATHS, headers, (r) => {
+    return parseMiniMaxRemains(r.data) != null;
+  }, diag);
+  if (!res) {
+    const msg = explainProbeFailure(diag, provider, 'plan');
+    const hint = /404|没有提供可用的用量接口/.test(msg)
+      ? '。MiniMax Token Plan 的 Base URL 填 https://www.minimaxi.com' : '';
+    return { ok: false, error: msg + hint };
+  }
+  const pct = parseMiniMaxRemains(res.data);
+  return {
+    ok: true,
+    usage: {
+      mode: 'plan',
+      fiveHourPct: pct == null ? null : clampPct(pct),
+      weeklyPct: null, // 响应无周侧——留灰，不伪造
+    },
+  };
 }
 
 // --- Failure diagnostics ---------------------------------------------------
@@ -736,10 +891,19 @@ function probeCandidates(provider, kind, paths, headers, accept, diag) {
 }
 
 async function fetchBalanceUsage(provider) {
-  // Moonshot 开放平台（按量计费）不走 one-api 方言——专用余额端点。
+  // 按量计费平台的专用余额端点（one-api 方言不适用）——按 host 分派。
   const bh = hostOf(provider.baseUrl.replace(/\/+$/, ''));
   if (bh === 'moonshot.cn' || bh.endsWith('.moonshot.cn') || bh === 'moonshot.ai' || bh.endsWith('.moonshot.ai')) {
     return fetchMoonshotBalance(provider);
+  }
+  if (bh === 'openrouter.ai' || bh.endsWith('.openrouter.ai')) {
+    return fetchOpenRouterBalance(provider);
+  }
+  if (bh === 'deepseek.com' || bh.endsWith('.deepseek.com')) {
+    return fetchDeepSeekBalance(provider);
+  }
+  if (bh === 'stepfun.com' || bh.endsWith('.stepfun.com') || bh === 'stepfun.ai' || bh.endsWith('.stepfun.ai')) {
+    return fetchStepFunBalance(provider);
   }
   const balanceCandidates = ['/api/user/balance', '/api/user/wallet', '/api/user/quota'];
   // `matched` is set by accept() for the winning candidate only — probeCandidates

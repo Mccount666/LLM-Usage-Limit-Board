@@ -19,6 +19,9 @@ const {
   getPath,
   parseWindowedUsage,
   parseOpenCodeUsage,
+  parseOpenRouterCredits,
+  parseDeepSeekBalance,
+  parseMiniMaxRemains,
 } = require('../src/lib/limits');
 
 let pass = 0;
@@ -227,6 +230,47 @@ t('OpenCode Go：rate-limited 状态不影响 percent 读取；字符串数字�
 t('OpenCode Go：坏形状 -> 双 null', () => {
   assert.deepStrictEqual(parseOpenCodeUsage({}), { fiveHourPct: null, weeklyPct: null });
   assert.deepStrictEqual(parseOpenCodeUsage({ usage: { rolling: { percent: [] } } }), { fiveHourPct: null, weeklyPct: null });
+});
+
+console.log('--- 按量余额 / Token Plan（OpenRouter / DeepSeek / MiniMax）---');
+t('OpenRouter credits：data 信封 + 字符串值，可用 = 充值 - 已用', () => {
+  const r = parseOpenRouterCredits({ data: { total_credits: '24.50', total_usage: '12.25' } });
+  assert.ok(Math.abs(r.amount - 12.25) < 1e-9);
+  assert.strictEqual(r.currency, 'USD');
+});
+t('OpenRouter：已用超过充值（负值）→ 拒绝；字段缺失 → null', () => {
+  assert.strictEqual(parseOpenRouterCredits({ data: { total_credits: '1', total_usage: '2' } }), null);
+  assert.strictEqual(parseOpenRouterCredits({ data: { total_credits: '1' } }), null);
+  assert.strictEqual(parseOpenRouterCredits({}), null);
+});
+t('DeepSeek：优先 CNY 行，取 total_balance', () => {
+  const r = parseDeepSeekBalance({ balance: [
+    { currency: 'USD', total_balance: '0.10' },
+    { currency: 'CNY', total_balance: '110.50' },
+  ] });
+  assert.ok(Math.abs(r.amount - 110.5) < 1e-9);
+  assert.strictEqual(r.currency, 'CNY');
+});
+t('DeepSeek：无 CNY 行回落首行；空数组/坏形状 → null', () => {
+  assert.strictEqual(parseDeepSeekBalance({ balance: [{ currency: 'USD', total_balance: '3.2' }] }).amount, 3.2);
+  assert.strictEqual(parseDeepSeekBalance({ balance: [] }), null);
+  assert.strictEqual(parseDeepSeekBalance({}), null);
+});
+t('MiniMax：usage_count 语义为剩余 — 1500/1200 → 已用 300 → 20%', () => {
+  const r = parseMiniMaxRemains({ model_remains: [
+    { model_name: 'MiniMax-M2.5', current_interval_total_count: 1500, current_interval_usage_count: 1200 },
+  ] });
+  assert.ok(Math.abs(r - 20) < 1e-9);
+});
+t('MiniMax：优先 M2.5 行；剩余为负的行跳过；空/坏形状 → null', () => {
+  const r = parseMiniMaxRemains({ model_remains: [
+    { model_name: 'other-model', current_interval_total_count: 100, current_interval_usage_count: 10 },
+    { model_name: 'MiniMax-M2.5', current_interval_total_count: 200, current_interval_usage_count: 50 },
+  ] });
+  assert.ok(Math.abs(r - 75) < 1e-9);
+  assert.strictEqual(parseMiniMaxRemains({ model_remains: [] }), null);
+  assert.strictEqual(parseMiniMaxRemains({}), null);
+  assert.strictEqual(parseMiniMaxRemains({ model_remains: [{ model_name: 'x', current_interval_total_count: 100, current_interval_usage_count: -5 }] }), null);
 });
 
 console.log('\nlimits.test: ' + pass + ' passed, ' + failures.length + ' failed');

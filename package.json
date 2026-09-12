@@ -7,7 +7,7 @@
     "start": "electron .",
     "dev": "electron . --enable-logging",
     "test": "node test/report-items.test.js && node test/limits.test.js && node test/ipc.test.js && node test/dist.test.js",
-    "test:dom": "electron test/dom/main.js stub-preload.js injection && electron test/dom/main.js stub-preload.js behavior && electron test/dom/main.js stub-preload.js firstrun && electron test/dom/main.js stub-preload-fail.js loadfail && electron test/dom/main.js stub-preload-savefail.js savefail && electron test/dom/main.js stub-preload-ipcfail.js ipcfail && electron test/dom/main.js stub-preload.js visual",
+    "test:dom": "electron test/dom/main.js stub-preload.js injection && electron test/dom/main.js stub-preload.js behavior && electron test/dom/main.js stub-preload.js firstrun && electron test/dom/main.js stub-preload.js mini && electron test/dom/main.js stub-preload-fail.js loadfail && electron test/dom/main.js stub-preload-savefail.js savefail && electron test/dom/main.js stub-preload-ipcfail.js ipcfail && electron test/dom/main.js stub-preload.js visual",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:win": "node tools/dist.js --win --x64",

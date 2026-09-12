@@ -305,6 +305,62 @@ function parseOpenCodeUsage(payload) {
   };
 }
 
+/**
+ * OpenRouter `/credits` payload: `{ data: { total_credits, total_usage } }`
+ * (USD strings; a bare root also tolerated). Remaining = credits - usage.
+ * Negative results mean a malformed payload — abstain, never fabricate.
+ */
+function parseOpenRouterCredits(payload) {
+  const d = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+  const total = numOf(d?.total_credits);
+  const used = numOf(d?.total_usage);
+  if (total == null || used == null) return null;
+  const amount = total - used;
+  if (amount < 0) return null;
+  return { amount, currency: 'USD' };
+}
+
+/**
+ * DeepSeek `/user/balance` payload: `{ balance: [{ currency, total_balance,
+ * granted_balance, topped_up_balance }, …] }`. Prefers the CNY row, falls
+ * back to the first parsable one; the quoted figure is total_balance
+ * (充值+赠送的可用总额).
+ */
+function parseDeepSeekBalance(payload) {
+  const list = Array.isArray(payload?.balance) ? payload.balance : null;
+  if (!list || list.length === 0) return null;
+  const ordered = [...list.filter((b) => b && b.currency === 'CNY'), ...list];
+  for (const b of ordered) {
+    const amount = numOf(b?.total_balance);
+    if (amount != null) return { amount, currency: b.currency || '' };
+  }
+  return null;
+}
+
+/**
+ * MiniMax `/coding_plan/remains` payload: `{ model_remains: [{…}], base_resp }`.
+ * ⚠️ SEMANTIC TRAP (verified against coding-plan-monitor's minimax.ts):
+ * `current_interval_usage_count` is the REMAINING count, not the used count —
+ * used = total - remaining. Prefers the MiniMax-M2.5 row. The response covers
+ * the 5h rolling window only; there is no weekly side (caller reports null).
+ */
+function parseMiniMaxRemains(payload) {
+  const list = Array.isArray(payload?.model_remains) ? payload.model_remains : null;
+  if (!list || list.length === 0) return null;
+  const ordered = [...list.filter((m) => m && m.model_name === 'MiniMax-M2.5'), ...list];
+  for (const m of ordered) {
+    const total = numOf(m?.current_interval_total_count);
+    const remaining = numOf(m?.current_interval_usage_count);
+    // Negative remaining is a malformed row (it would inflate "used" past the
+    // total) — skip it and try the next model instead of reporting nonsense.
+    if (total == null || total <= 0 || remaining == null || remaining < 0) continue;
+    const used = total - remaining;
+    if (used < 0) continue;
+    return (used / total) * 100;
+  }
+  return null;
+}
+
 module.exports = {
   FIVE_HOUR_SPEC,
   WEEKLY_SPEC,
@@ -317,4 +373,7 @@ module.exports = {
   normalizeBalance,
   parseWindowedUsage,
   parseOpenCodeUsage,
+  parseOpenRouterCredits,
+  parseDeepSeekBalance,
+  parseMiniMaxRemains,
 };

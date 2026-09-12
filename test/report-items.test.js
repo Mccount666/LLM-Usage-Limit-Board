@@ -60,7 +60,8 @@ t('P0-3 无 shell:openExternal；shell 未 require', () => {
 t('P0-3b preload 每个通道都有 main handler', () => {
   const chans = [...PRE.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map((m) => m[1]);
   const handlers = [...MAIN.matchAll(/ipcMain\.handle\('([^']+)'/g)].map((m) => m[1]);
-  assert.strictEqual(chans.length, 7, 'IPC surface changed — update this inventory');
+  // 第八通道 window:set-display-mode：双态窗口（feedback §28）。
+  assert.strictEqual(chans.length, 8, 'IPC surface changed — update this inventory');
   for (const h of handlers) assert.ok(chans.includes(h), 'handler with no caller: ' + h);
   for (const c of chans) assert.ok(handlers.includes(c), 'no handler for ' + c);
 });
@@ -117,18 +118,20 @@ t('P2-3b 保存失败反馈到 UI', () => {
   matches(REND, /function showSaveError\(msg\)/);
   matches(HTML, /id="saveError"/);
 });
-t('第五轮 P1-C 全部 7 个 IPC 调用点都有兜底', () => {
+t('第五轮 P1-C 全部 8 个 IPC invoke 调用点都有兜底（另有 1 个事件订阅 onUiMode）', () => {
   matches(REND, /loadProviders\(\)\.catch\(/);
   matches(REND, /getSecurityStatus\(\)\.catch\(/);
   matches(REND, /minimizeWindow\(\)\.catch\(\(\) => \{\}\)/);
   matches(REND, /hideWindow\(\)\.catch\(\(\) => \{\}\)/);
+  matches(REND, /setDisplayMode\('mini', w\)\.catch\(\(\) => \{\}\)/);
+  matches(REND, /setDisplayMode\('config'\)\.catch\(\(\) => \{\}\)/);
   matches(REND, /try \{\s*\r?\n\s*const res = await window\.api\.saveProviders\(/);
   matches(REND, /try \{\s*\r?\n\s*const res = await window\.api\.deleteProvider\(/);
   matches(REND, /const res = await window\.api\.fetchUsage\(p\.id\)/);
   const sites = [...REND.matchAll(/window\.api\.(\w+)\(/g)].map((m) => m[1]);
   assert.deepStrictEqual(
     [...new Set(sites)].sort(),
-    ['deleteProvider', 'fetchUsage', 'getSecurityStatus', 'hideWindow', 'loadProviders', 'minimizeWindow', 'saveProviders'],
+    ['deleteProvider', 'fetchUsage', 'getSecurityStatus', 'hideWindow', 'loadProviders', 'minimizeWindow', 'onUiMode', 'saveProviders', 'setDisplayMode'],
     'IPC surface changed — re-check the fallback inventory',
   );
 });
@@ -325,14 +328,19 @@ t('P3-C 候选先到先用 + 记住可用路径', () => {
   assert.ok(!/await Promise\.all\(/.test(MAIN), 'Promise.all would wait for the slowest candidate');
   // Single-mechanism invariant: EVERY candidate probe goes through
   // probeCandidates. Originally 2 call sites (userinfo + balance); provider
-  // branches (feedback §27) add kimi-usage / opencode-usage / moonshot-balance
-  // — still the same mechanism, now five named kinds.
-  assert.strictEqual((MAIN.match(/probeCandidates\(provider, '/g) || []).length, 5);
+  // branches add seven named kinds (kimi/opencode/moonshot from feedback §27,
+  // minimax/openrouter/deepseek/stepfun from §28) — now nine call sites, all
+  // still the same first-to-arrive mechanism.
+  assert.strictEqual((MAIN.match(/probeCandidates\(provider, '/g) || []).length, 9);
   matches(MAIN, /probeCandidates\(provider, 'userinfo'/);
   matches(MAIN, /probeCandidates\(provider, 'balance'/);
   matches(MAIN, /probeCandidates\(provider, 'kimi-usage'/);
   matches(MAIN, /probeCandidates\(provider, 'opencode-usage'/);
   matches(MAIN, /probeCandidates\(provider, 'moonshot-balance'/);
+  matches(MAIN, /probeCandidates\(provider, 'minimax-remains'/);
+  matches(MAIN, /probeCandidates\(provider, 'openrouter-credits'/);
+  matches(MAIN, /probeCandidates\(provider, 'deepseek-balance'/);
+  matches(MAIN, /probeCandidates\(provider, 'stepfun-balance'/);
 });
 t('第五轮 P1-B accept 严格且按调用方区分', () => {
   matches(MAIN, /function hasPlanLimits\(/);

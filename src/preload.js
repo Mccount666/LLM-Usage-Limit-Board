@@ -9,4 +9,10 @@ contextBridge.exposeInMainWorld('api', {
   getSecurityStatus: () => ipcRenderer.invoke('security:status'),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   hideWindow: () => ipcRenderer.invoke('window:hide'),
+  // 双态窗口：mini（透明 + 鼠标穿透的状态条，宽度由渲染层量好后上报）/
+  // config（可交互面板）；ui:mode 是托盘强制切换时的反向通知。
+  setDisplayMode: (mode, width) => ipcRenderer.invoke('window:set-display-mode', mode, width),
+  onUiMode: (cb) => {
+    ipcRenderer.on('ui:mode', (_evt, mode) => cb(mode));
+  },
 });

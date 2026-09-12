@@ -49,4 +49,10 @@ contextBridge.exposeInMainWorld('api', {
   setUsage: async (id, value) => { usage[id] = value; },
   minimizeWindow: async () => {},
   hideWindow: async () => {},
+  // 双态窗口（displayMode）：DOM 场景只断言渲染层形态；这里记录 setDisplayMode
+  // 的调用供场景需要时断言，onUiMode 不推送（托盘路径由真实主进程覆盖）。
+  setDisplayMode: async (mode, width) => { displayModeCalls.push([mode, width]); return { ok: true }; },
+  onUiMode: (cb) => {},
 });
+let displayModeCalls = [];
+

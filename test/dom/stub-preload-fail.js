@@ -11,4 +11,8 @@ contextBridge.exposeInMainWorld('api', {
   fetchUsage: async () => ({ ok: false, error: 'n/a' }),
   minimizeWindow: async () => {},
   hideWindow: async () => {},
+  setDisplayMode: async () => {
+    throw new Error('IPC channel closed');
+  },
+  onUiMode: (cb) => {},
 });

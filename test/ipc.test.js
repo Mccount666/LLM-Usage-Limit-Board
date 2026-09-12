@@ -39,9 +39,14 @@ const electronStub = {
   },
   BrowserWindow: class {
     constructor() {
-      this.webContents = { setWindowOpenHandler() {}, on() {} };
+      const win = this;
       this._minimized = false;
       this.calls = [];
+      this.webContents = {
+        setWindowOpenHandler() {},
+        on() {},
+        send(ch, data) { win.calls.push(`send:${ch}:${data}`); },
+      };
       windowCalls.push(this);
     }
     loadFile() {}
@@ -54,9 +59,16 @@ const electronStub = {
     focus() { this.calls.push('focus'); }
     isMinimized() { return this._minimized; }
     restore() { this._minimized = false; this.calls.push('restore'); }
+    setBounds(b) { this._bounds = b; this.calls.push('setBounds'); }
+    setIgnoreMouseEvents(f) { this._ignoreMouse = f; this.calls.push(`ignoreMouse:${f ? 'on' : 'off'}`); }
   },
   ipcMain: { handle: (ch, fn) => { handlers[ch] = fn; } },
-  screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1920, height: 1080 } }) },
+  screen: {
+    getPrimaryDisplay: () => ({
+      workAreaSize: { width: 1920, height: 1080 },
+      workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+    }),
+  },
   safeStorage: {
     isEncryptionAvailable: () => encryptionAvailable,
     encryptString: (s) => Buffer.from('enc:' + s, 'utf8'),
@@ -120,8 +132,8 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
 
 (async () => {
   console.log('--- ipc 注册面 ---');
-  await t('7 个通道全部注册', () => {
-    for (const ch of ['providers:load', 'providers:save', 'providers:delete', 'usage:fetch', 'security:status', 'window:minimize', 'window:hide']) {
+  await t('8 个通道全部注册', () => {
+    for (const ch of ['providers:load', 'providers:save', 'providers:delete', 'usage:fetch', 'security:status', 'window:minimize', 'window:hide', 'window:set-display-mode']) {
       assert.ok(hasHandler(ch), 'missing handler ' + ch);
     }
   });
@@ -275,6 +287,82 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.match(r.error, /https:\/\/opencode\.ai\/zen\/go\/v1/);
   });
 
+  console.log('--- usage:fetch / OpenRouter 余额（host openrouter.ai）---');
+  await t('/credits 命中：可用 = 充值 - 已用，币种 USD', async () => {
+    await save([{ id: 'or1', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', mode: 'balance', apiKey: 'sk-or-test' }]);
+    setRoutes([{ match: '/credits', status: 200, body: { data: { total_credits: '24.50', total_usage: '12.25' } } }]);
+    const r = await fetchUsage('or1');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.amount - 12.25) < 1e-9, 'amount=' + r.usage.amount);
+    assert.strictEqual(r.usage.currency, 'USD');
+    assert.ok(calls.every((c) => !c.url.includes('/api/user/')), 'one-api candidates must not be probed');
+  });
+
+  console.log('--- usage:fetch / DeepSeek 余额（host deepseek.com）---');
+  await t('/user/balance 命中：取 CNY 行 total_balance', async () => {
+    await save([{ id: 'ds1', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', mode: 'balance', apiKey: 'sk-ds-test' }]);
+    setRoutes([{ match: '/user/balance', status: 200, body: { is_available: true, balance: [
+      { currency: 'USD', total_balance: '0.10' },
+      { currency: 'CNY', total_balance: '110.50' },
+    ] } }]);
+    const r = await fetchUsage('ds1');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.amount - 110.5) < 1e-9, 'amount=' + r.usage.amount);
+    assert.strictEqual(r.usage.currency, 'CNY');
+  });
+
+  console.log('--- usage:fetch / MiniMax Token Plan（host minimaxi.com）---');
+  await t('/coding_plan/remains 命中：usage_count 语义为剩余 — 1500/1200 → 20%，周侧灰', async () => {
+    await save([{ id: 'mm1', name: 'MiniMax', baseUrl: 'https://www.minimaxi.com', mode: 'plan', apiKey: 'sk-mm-test' }]);
+    setRoutes([{ match: '/coding_plan/remains', status: 200, body: { model_remains: [
+      { model_name: 'MiniMax-M2.5', current_interval_total_count: 1500, current_interval_usage_count: 1200, start_time: 1, end_time: 2, remains_time: 3 },
+    ], base_resp: { status_code: 0, status_msg: 'success' } } }]);
+    const r = await fetchUsage('mm1');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.fiveHourPct - 20) < 1e-9, 'fiveHourPct=' + r.usage.fiveHourPct);
+    assert.strictEqual(r.usage.weeklyPct, null);
+    assert.ok(calls.every((c) => !c.url.includes('/api/user/')), 'one-api candidates must not be probed');
+  });
+
+  console.log('--- usage:fetch / StepFun（host stepfun.com）---');
+  await t('余额模式 /v1/accounts 命中：balance 字段', async () => {
+    await save([{ id: 'sf1', name: 'StepFun', baseUrl: 'https://api.stepfun.com', mode: 'balance', apiKey: 'sk-sf-test' }]);
+    setRoutes([{ match: '/v1/accounts', status: 200, body: { object: 'account', type: 'prepaid', balance: 26.5, total_cash_balance: 30, total_voucher_balance: 1.5 } }]);
+    const r = await fetchUsage('sf1');
+    assert.strictEqual(r.ok, true);
+    assert.ok(Math.abs(r.usage.amount - 26.5) < 1e-9, 'amount=' + r.usage.amount);
+  });
+  await t('Plan 模式诚实告知：接口未开放，不发起探测', async () => {
+    await save([{ id: 'sf2', name: 'StepFun2', baseUrl: 'https://api.stepfun.com', mode: 'plan', apiKey: 'sk-sf-test' }]);
+    setRoutes([{ match: 'stepfun.com', status: 404, body: {} }]);
+    const r = await fetchUsage('sf2');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /Step Plan 暂无公开的 5h\/周额度接口/);
+    assert.strictEqual(calls.length, 0, 'plan guard answers directly, zero probes');
+  });
+
+  console.log('--- window:set-display-mode（双态窗口）---');
+  await t('mini：按渲染层量得的宽度改窗 + 鼠标穿透开启', async () => {
+    const r = await handlers['window:set-display-mode'](null, 'mini', 640);
+    assert.strictEqual(r.ok, true);
+    const w = lastWindow();
+    assert.strictEqual(w._bounds.width, 640);
+    assert.strictEqual(w._bounds.height, 44);
+    assert.strictEqual(w._ignoreMouse, true);
+  });
+  await t('mini 宽度超屏被钳制', async () => {
+    await handlers['window:set-display-mode'](null, 'mini', 99999);
+    assert.strictEqual(lastWindow()._bounds.width, 1896);
+  });
+  await t('config：恢复 420x520 + 穿透关闭 + 显示聚焦', async () => {
+    await handlers['window:set-display-mode'](null, 'config');
+    const w = lastWindow();
+    assert.strictEqual(w._bounds.width, 420);
+    assert.strictEqual(w._bounds.height, 520);
+    assert.strictEqual(w._ignoreMouse, false);
+    assert.ok(w.calls.includes('show') && w.calls.includes('focus'));
+  });
+
   console.log('--- usage:fetch / Moonshot 开放平台余额（host api.moonshot.cn）---');
   await t('/users/me/balance 命中：data 信封里的 balance 解析', async () => {
     await save([{ id: 'ms1', name: 'Moonshot', baseUrl: 'https://api.moonshot.cn/v1', mode: 'balance', apiKey: 'sk-ms-test' }]);
@@ -402,19 +490,27 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
   });
   // The tray menu is the ONLY restore path now (the unused window:show IPC
   // channel was removed to shrink the surface), so it must do the full job.
-  await t('菜单「显示看板」恢复被最小化的窗口并聚焦', async () => {
+  await t('菜单「显示看板」恢复被最小化的窗口并聚焦（含回切 config 形态）', async () => {
     const w = lastWindow();
     w._minimized = true;
     w.calls.length = 0;
     trayCalls[0].menu.find((m) => m.label === '显示看板').click();
-    assert.deepStrictEqual(w.calls, ['restore', 'show', 'focus'], JSON.stringify(w.calls));
+    assert.deepStrictEqual(
+      w.calls,
+      ['restore', 'show', 'focus', 'setBounds', 'ignoreMouse:off', 'show', 'focus', 'send:ui:mode:config'],
+      JSON.stringify(w.calls),
+    );
   });
-  await t('窗口未最小化时菜单只 show + focus', async () => {
+  await t('窗口未最小化时菜单 show + focus（并回切 config 形态）', async () => {
     const w = lastWindow();
     w._minimized = false;
     w.calls.length = 0;
     trayCalls[0].menu.find((m) => m.label === '显示看板').click();
-    assert.deepStrictEqual(w.calls, ['show', 'focus'], JSON.stringify(w.calls));
+    assert.deepStrictEqual(
+      w.calls,
+      ['show', 'focus', 'setBounds', 'ignoreMouse:off', 'show', 'focus', 'send:ui:mode:config'],
+      JSON.stringify(w.calls),
+    );
   });
   await t('已移除的 window:show 通道确实不存在', () => {
     assert.ok(!handlers['window:show'], 'window:show should no longer be registered');

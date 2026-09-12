@@ -22,4 +22,8 @@ contextBridge.exposeInMainWorld('api', {
   hideWindow: async () => {
     throw new Error('window:hide failed');
   },
+  setDisplayMode: async () => {
+    throw new Error('window:set-display-mode failed');
+  },
+  onUiMode: (cb) => {},
 });

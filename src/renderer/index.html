@@ -102,6 +102,11 @@
         <span class="poll-info">每 60s 自动刷新 · 本地存储</span>
       </footer>
 
+      <!-- 迷你状态条（displayMode = mini）：保存校验成功后收缩成这个形态。
+           透明背景、窗口级鼠标穿透（主进程 setIgnoreMouseEvents），只可看；
+           回到配置面板的入口在托盘菜单。数据由 renderer.js 从缓存重绘。 -->
+      <div id="miniBar" class="mini-bar hidden"></div>
+
       <!-- First-run notice. The privacy promise is the product's core claim, so
            it is stated on first launch rather than only buried in the settings
            panel. Dismissal is remembered in localStorage. -->
