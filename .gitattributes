@@ -1,0 +1,17 @@
+# N-31 (review round 17): pin the whole repo to a single LF byte domain.
+#
+# `core.autocrlf=true` on this machine silently normalizes CRLF -> LF on
+# commit, so `git status` stayed clean while src/main.js diverged between the
+# worktree (CRLF) and the blob (LF) — the md5 manifests were the only witness.
+# `eol=lf` makes the smudge filter write LF on checkout, so worktree, blob and
+# the packaged asar share one byte domain and every hash in the review
+# manifests is reproducible from a fresh checkout regardless of autocrlf.
+* text=auto eol=lf
+
+# Binary assets — never normalize.
+*.ico -text
+*.png -text
+
+# PowerShell scripts are review-agent forensics (see .gitignore: the project
+# ships none of its own). Left unnormalized should one ever be committed.
+*.ps1 -text
