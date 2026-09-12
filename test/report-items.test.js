@@ -436,7 +436,10 @@ t('N-29 存在性判定是 ∃ 命题：findSetupArtifact 必须遍历全部 Set
   notMatches(DIST, /readdirSync\(dist\)\.find\(/);
   // snapshot and gate each walk dist/ — one loop means the gate delegates to
   // the snapshot's narrow view again, which is exactly the N-29 shape
-  const loops = (DIST.match(/for \(const [A-Za-z] of fs\.readdirSync\(dist\)\)/g) || []).length;
+  // [A-Za-z]+ (round 13, report part 12 记账①): the single-letter class made
+  // the guard false-red on a legal rename (f -> file); the counted invariant
+  // is "two walks of dist/", not the variable's name
+  const loops = (DIST.match(/for \(const [A-Za-z]+ of fs\.readdirSync\(dist\)\)/g) || []).length;
   assert.ok(loops >= 2, 'findSetupArtifact must walk dist/ itself, found ' + loops + ' readdirSync loop(s)');
 });
 t('N-28a 非 2xx body 的网关话术必须进 diag（字面守卫：有界解析在位，行为由 ipc.test.js ⑤v5/⑤v5b 守）', () => {

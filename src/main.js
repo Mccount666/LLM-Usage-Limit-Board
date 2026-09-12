@@ -468,8 +468,13 @@ function safeMessage(msg, apiKey) {
 /** Pull the gateway's own words (message/error/msg) out of a JSON body. */
 function gatewayMessage(body) {
   if (!body || typeof body !== 'object') return '';
-  const m = body.message ?? body.error ?? body.msg;
-  return typeof m === 'string' && m.trim() ? m : '';
+  // N-30: "absent" is defined by the consumer — a non-empty string. `??` only
+  // skips null/undefined, so an early key that exists but is unusable ('' /
+  // whitespace / number / object) used to absorb the chain and bury the real
+  // words sitting in a later key. Walk the keys in order and take the first
+  // value that actually satisfies the contract.
+  const m = [body.message, body.error, body.msg].find((v) => typeof v === 'string' && v.trim());
+  return m ?? '';
 }
 
 function explainProbeFailure(diag, provider, mode) {

@@ -601,6 +601,165 @@ const hasHandler = (ch) => typeof handlers[ch] === 'function';
     assert.ok(!/所有候选路径均返回 404/.test(r.error), 'generic words still win over notFound: ' + r.error);
   });
 
+  console.log('--- D 组：话术 ×「内容不可用」× 404 组合格 + 标量 body + error 键链（第十三轮转正）---');
+  await t('D1 话术 + 200-非JSON + 404 三类混合 → tally 两类并列、说话候选计入 404（D 组转正）', async () => {
+    await reseed();
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: { message: 'busy now' } },
+      { match: '/api/user/token', status: 200, jsonThrows: true },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    // reviewer probe D1 (report part 12 §二): speak-first survives a mixed set,
+    // both tally classes are listed side by side, and the speaking 404 counts
+    // in the 404 tally (N-26 full-set semantics) — 3, not 2.
+    assert.match(r.error, /服务商拒绝了请求：busy now/, r.error);
+    assert.match(r.error, /3 个候选返回 404/, r.error);
+    assert.match(r.error, /1 个有响应但内容不可用/, r.error);
+  });
+  await t('D4 404 body 为 JSON 标量 → 不伪造话术，落 notFound 分支（D 组转正）', async () => {
+    await reseed();
+    // json() resolves to a bare string — gatewayMessage's typeof gate must
+    // reject it (main.js:470) so no message is fabricated from a non-object body
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: 'a plain string body' },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /所有候选路径均返回 404/, r.error);
+    assert.ok(!/服务商拒绝了请求/.test(r.error), 'scalar body must not fabricate a gateway message: ' + r.error);
+    assert.ok(!/无响应|内容不可用/.test(r.error), 'no phantom counting classes: ' + r.error);
+  });
+  await t('D5 404 body 走 error 键（message 缺席）→ 话术键链在非 2xx 路径可达（D 组转正）', async () => {
+    await reseed();
+    // all pre-D ⑤-series blocks only ever fed the `message` key; the
+    // message ?? error ?? msg chain (main.js:471) was unpinned on non-2xx
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: { error: 'denied by upstream' } },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /服务商拒绝了请求：denied by upstream/, r.error);
+    assert.match(r.error, /4 个候选返回 404/, r.error);
+    assert.ok(!/所有候选路径均返回 404/.test(r.error), 'error-key words win over notFound: ' + r.error);
+  });
+
+  console.log('--- E 组：N-30 键链空值吸收 —— 「缺席」按非空字符串定义，不按 nullish ---');
+  await t('E1 404 + {message:\'\', error:\'quota exhausted\'} → 空串 message 不得吸收 error 键（N-30，探针转正）', async () => {
+    await reseed();
+    // reviewer probe E1 (report part 13 §五): `??` only skips nullish, so the
+    // empty-string message used to absorb the chain and the real words in
+    // `error` never reached the UI (fell to the notFound branch)
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: { message: '', error: 'quota exhausted' } },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /服务商拒绝了请求：quota exhausted/, r.error);
+    assert.match(r.error, /4 个候选返回 404/, r.error);
+    assert.ok(!/所有候选路径均返回 404/.test(r.error), 'empty-string message must not absorb the chain: ' + r.error);
+  });
+  await t('E2 404 + {message:503, error:\'real words from error\'} → 非字符串 message 同样不得吸收（N-30，探针转正）', async () => {
+    await reseed();
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: { message: 503, error: 'real words from error' } },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /服务商拒绝了请求：real words from error/, r.error);
+    assert.match(r.error, /4 个候选返回 404/, r.error);
+    // String() coercion must not creep back in as a "fix" — the number is
+    // unusable as words, not something to print
+    assert.ok(!/：503/.test(r.error), 'non-string message must be skipped, not stringified: ' + r.error);
+    assert.ok(!/所有候选路径均返回 404/.test(r.error), 'non-string message must not absorb the chain: ' + r.error);
+  });
+  await t('E3 404 + {message:null, error:\'null falls through\'} → null 穿透语义保持（N-30 反例格：修前修后均绿，钉住不回潮）', async () => {
+    await reseed();
+    // counter-example cell: null is nullish, so it fell through correctly
+    // even before N-30 — this pins the penetration semantics the fix must
+    // preserve (the reviewer's evidence that the chain was DESIGNED to walk)
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: { message: null, error: 'null falls through' } },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /服务商拒绝了请求：null falls through/, r.error);
+    assert.match(r.error, /4 个候选返回 404/, r.error);
+  });
+  await t('E4 404 + {msg:\'words in msg key\'} → msg 尾键可达（第十四轮记账③：链第三位的回归钉）', async () => {
+    await reseed();
+    // reviewer probe E4: green before and after N-30 — what was missing was
+    // the regression pin, not the implementation (round-13 记账② covered
+    // only the `error` half via D5)
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: { msg: 'words in msg key' } },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /服务商拒绝了请求：words in msg key/, r.error);
+    assert.match(r.error, /4 个候选返回 404/, r.error);
+  });
+  await t('E5 全 200 无限额字段 + {message:\'\', error:\'quota exhausted\'} → 2xx 路径同型不吸收（N-30，探针转正）', async () => {
+    await reseed();
+    // reviewer probe E5: the 2xx path feeds note() -> gatewayMessage(res.data)
+    // — same absorption shape, so the fix must cover it too. Pre-N-30 this
+    // fell to the field branch ("找不到 5h/周 限额字段") with the words dead.
+    setRoutes([
+      { match: '/api/user/self', status: 200, body: { message: '', error: 'quota exhausted' } },
+      { match: '/api/user/token', status: 200, body: { message: '', error: 'quota exhausted' } },
+      { match: '/api/user/status', status: 200, body: { message: '', error: 'quota exhausted' } },
+      { match: '/api/status', status: 200, body: { message: '', error: 'quota exhausted' } },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /服务商拒绝了请求：quota exhausted/, r.error);
+    // the gateway branch keeps the "send me the JSON" hint with the mode's
+    // field names; the bare field-mismatch wording must not come back
+    assert.match(r.error, /请把该接口的返回 JSON 发给我适配 5h\/周 限额字段/, r.error);
+    assert.ok(!/服务商返回中找不到 5h\/周 限额字段/.test(r.error), 'field branch must not absorb the gateway words: ' + r.error);
+  });
+
+  console.log('--- F1：键链优先级正面格（第十五轮转正）---');
+  await t('F1 三键均可用 → message 胜出、error/msg 不透出（第十五轮探针转正：键链顺序语义）', async () => {
+    await reseed();
+    // reviewer probe F1 (report part 14 §一): E1-E4 pin the negative cells
+    // (early key unusable / null penetration / tail key reachable), but the
+    // chain's positive order semantics — the FIRST non-empty string wins and
+    // later usable keys must not override it — had zero coverage
+    setRoutes([
+      { match: '/api/user/self', status: 404, body: { message: 'm words', error: 'e words', msg: 'z words' } },
+      { match: '/api/user/token', status: 404, body: {} },
+      { match: '/api/user/status', status: 404, body: {} },
+      { match: '/api/status', status: 404, body: {} },
+    ]);
+    const r = await fetchUsage('p1');
+    assert.strictEqual(r.ok, false);
+    assert.match(r.error, /服务商拒绝了请求：m words/, r.error);
+    assert.match(r.error, /4 个候选返回 404/, r.error);
+    assert.ok(!/e words/.test(r.error), 'error key must not override the winner: ' + r.error);
+    assert.ok(!/z words/.test(r.error), 'msg key must not override the winner: ' + r.error);
+  });
+
   console.log('--- 只报一侧限额：另一侧必须是 null，不能被伪造成 0 ---');
   await t('只有周限额时 fiveHourPct 为 null（不是 0）', async () => {
     await reseed();
