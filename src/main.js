@@ -1,4 +1,3 @@
-require('fs').appendFileSync('dbg-load.log', 'main.js loaded, hash=' + require('crypto').createHash('md5').update(require('fs').readFileSync('src/main.js')).digest('hex').slice(0,8) + String.fromCharCode(10));
 // Electron main process.
 //
 // Privacy contract (this file is the ONLY place network egress can happen):

@@ -289,6 +289,14 @@ t('P3-A 行形状由 usage.mode 决定', () => {
   matches(REND, /if \(row\.dataset\.mode !== mode \|\| row\.dataset\.secondLabel !== secondLabel\)/);
   matches(REND, /row\.innerHTML = buildRowHtml\(p, mode, secondLabel\)/);
 });
+t('交付面无调试残留（dbg- 标记；§29.十三 启动崩溃事故回归钉）', () => {
+  // 调试期在模块顶层插过的 appendFileSync('dbg-load.log'…) 随 b8c67670 打包
+  // 发布过：相对路径读自身在安装目录必 ENOENT，主进程启动即崩。此钉保证
+  // 任何 dbg-* 标记不得进入交付源码。
+  for (const [name, src] of [['main', MAIN], ['preload', PRE], ['renderer', REND], ['limits', LIMITS]]) {
+    assert.ok(!/dbg-(load|accept)/.test(src), 'debug marker leaked into ' + name);
+  }
+});
 t('P3-B providers:save 校验 id 字符串且唯一', () => {
   matches(MAIN, /typeof rawId !== 'string' \|\| rawId\.length === 0/);
   matches(MAIN, /seenIds\.has\(id\)/);
